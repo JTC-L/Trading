@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Options Market-Making Sim</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<button id="fullscreenBtn" title="Toggle fullscreen">⛶ Fullscreen</button>
+<div id="app">
+
+  <!-- ============================== HOME (MODE CHOOSER) ============================== -->
+  <section id="homeScreen">
+    <h1>Mock Options Trading Games</h1>
+    <div class="choice-row">
+      <button id="chooseDrillBtn" class="choice-btn">Drill</button>
+      <button id="chooseSimBtn" class="choice-btn">Simulation</button>
+    </div>
+  </section>
+
+  <!-- ============================== SIMULATION CONFIG SCREEN ============================== -->
+  <section id="simConfigScreen" class="hidden">
+    <div class="home-cards">
+      <div class="home-card" id="simCard">
+        <h2>Simulation</h2>
+
+        <div class="cfg-section">
+          <h3>Difficulty</h3>
+
+          <div class="cfg-row">
+            <label class="slider-label">Trade pace <b id="cfgTradePaceLabel"></b></label>
+            <div class="slider-row">
+              <span class="slider-end">0.5</span>
+              <input type="range" id="cfgTradePace" class="cfg-input" min="0.5" max="4" step="0.1">
+              <span class="slider-end">4.0</span>
+            </div>
+          </div>
+
+          <div class="cfg-row cfg-radiogroup">
+            <span class="cfg-label">Session theme:</span>
+            <label><input type="radio" name="certaintyMode" value="none" class="cfg-input"> Neither</label>
+            <label><input type="radio" name="certaintyMode" value="stock" class="cfg-input"> Fixed stock</label>
+            <label><input type="radio" name="certaintyMode" value="vol" class="cfg-input"> Fixed vol</label>
+          </div>
+
+          <div class="cfg-row">
+            <label class="slider-label">Board filled at start <b id="cfgFillPctLabel"></b></label>
+            <div class="slider-row">
+              <span class="slider-end">25%</span>
+              <input type="range" id="cfgFillPct" class="cfg-input" min="25" max="100" step="25">
+              <span class="slider-end">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="cfg-section">
+          <h3>Instruments</h3>
+          <div class="cfg-row cfg-toggles">
+            <label class="cfg-toggle"><input type="checkbox" id="cfgSpreadsOn" class="cfg-input"> Vertical spreads</label>
+            <label class="cfg-toggle"><input type="checkbox" id="cfgSpreadBookOn" class="cfg-input"> Spread book</label>
+            <label class="cfg-toggle"><input type="checkbox" id="cfgIdbOn" class="cfg-input"> IDB</label>
+          </div>
+        </div>
+
+        <div class="cfg-section">
+          <h3>Position</h3>
+          <div class="cfg-row cfg-toggles">
+            <label class="cfg-toggle"><input type="checkbox" id="cfgStartWithPosition" class="cfg-input"> Start with a position</label>
+            <label class="cfg-toggle"><input type="checkbox" id="cfgShowPosition" class="cfg-input"> Show position</label>
+          </div>
+        </div>
+
+        <div class="cfg-row">
+          <label class="slider-label">Session length <b id="cfgSimLengthLabel"></b></label>
+          <div class="slider-row">
+            <span class="slider-end">5m</span>
+            <input type="range" id="cfgSimLength" class="cfg-input" min="5" max="20" step="1">
+            <span class="slider-end">20m</span>
+          </div>
+        </div>
+
+        <button id="confirmStartBtn" class="start-btn">Start Simulation</button>
+        <button id="simBackBtn" class="back-btn">&larr; Back</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== DRILL CONFIG SCREEN ============================== -->
+  <section id="drillConfigScreen" class="hidden">
+    <div class="home-cards">
+      <div class="home-card" id="drillCard">
+        <h2>Drills</h2>
+        <p class="drill-sub">Put-call parity speed drill.</p>
+        <div class="cfg-row">
+          <label class="slider-label">Session time <b id="cfgDrillMinutesLabel"></b></label>
+          <div class="slider-row">
+            <span class="slider-end">1m</span>
+            <input type="range" id="cfgDrillMinutes" class="cfg-input" min="1" max="10" step="1">
+            <span class="slider-end">10m</span>
+          </div>
+        </div>
+        <button id="startDrillBtn" class="start-btn">Start Drill</button>
+        <button id="drillBackBtn" class="back-btn">&larr; Back</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== COUNTDOWN OVERLAY ============================== -->
+  <div id="countdownOverlay" class="hidden">
+    <div id="countdownNumber">3</div>
+  </div>
+
+  <!-- ============================== SESSION SCREEN ============================== -->
+  <section id="sessionScreen" class="hidden">
+    <header id="summaryBar">
+      <div id="summaryText"></div>
+      <div class="summary-actions">
+        <span id="statusBanner"></span>
+        <span id="sessionClock">0:00</span>
+        <div class="clockbarwrap"><div id="clockBar" class="clockbar"></div></div>
+        <button id="restartBtn">Restart</button>
+        <button id="resetConfigBtn">Reset configuration</button>
+      </div>
+    </header>
+
+    <div id="mainGrid">
+      <main id="boardArea">
+        <div id="boardHeader">
+          <div id="stockBox" class="instrument-box big"></div>
+          <div id="rcBox" class="instrument-box rc"></div>
+        </div>
+        <div id="colHeaders" class="colheaders"></div>
+        <div id="boardGridWrap">
+          <div id="mainRow" class="main-row"></div>
+          <svg id="spreadLinesSvg" class="spreadlines"></svg>
+        </div>
+      </main>
+
+      <aside id="sidePanel">
+        <section id="alertsSection">
+          <h2>Alerts</h2>
+          <div id="alerts"></div>
+        </section>
+        <section id="positionPanel">
+          <h2>Position</h2>
+          <canvas id="payoffChart" width="360" height="140"></canvas>
+          <div id="greeksRow" class="greeksrow"></div>
+        </section>
+      </aside>
+
+    </div>
+
+    <div id="bottomRow">
+      <section id="spreadBookSection">
+        <h2>Spread Book</h2>
+        <div id="spreadBookRow" class="spreadbook-row"></div>
+      </section>
+
+      <section id="idbSection">
+        <h2>IDB (Inter-Dealer Broker)</h2>
+        <div id="idbActive"></div>
+        <div id="idbLog"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============================== DRILL SCREEN ============================== -->
+  <section id="drillScreen" class="hidden">
+    <div id="drillTop">
+      <div id="drillScore">Score: <b id="drillScoreVal">0</b></div>
+      <div id="drillTimer">0:00</div>
+    </div>
+
+    <div id="drillBoard">
+      <div id="drillGrid">
+        <div class="drill-col" style="grid-column: 3; grid-row: 1;">
+          <div class="drill-collabel">Stock</div><div id="drillStock" class="drill-cell big"></div>
+        </div>
+        <div class="drill-col" style="grid-column: 4 / span 2; grid-row: 1;">
+          <div class="drill-collabel">R/C</div><div id="drillRc" class="drill-cell rc"></div>
+        </div>
+
+        <div class="drill-col" style="grid-column: 1; grid-row: 2;"><div class="drill-collabel">P + S</div><div id="drillPS" class="drill-cell"></div></div>
+        <div class="drill-col" style="grid-column: 2; grid-row: 2;"><div class="drill-collabel">Call</div><div id="drillCall" class="drill-cell"></div></div>
+        <div class="drill-col" style="grid-column: 3; grid-row: 2;"><div class="drill-collabel">Strike</div><div id="drillStrike" class="drill-cell strike"></div></div>
+        <div class="drill-col" style="grid-column: 4; grid-row: 2;"><div class="drill-collabel">Put</div><div id="drillPut" class="drill-cell"></div></div>
+        <div class="drill-col" style="grid-column: 5; grid-row: 2;"><div class="drill-collabel">B/W</div><div id="drillBW" class="drill-cell"></div></div>
+
+        <div class="drill-col" style="grid-column: 2; grid-row: 3;"><div class="drill-collabel">Straddle</div><div id="drillStraddle" class="drill-cell"></div></div>
+        <div class="drill-col" style="grid-column: 4; grid-row: 3;"><div class="drill-collabel">Combo</div><div id="drillCombo" class="drill-cell"></div></div>
+      </div>
+    </div>
+
+    <input type="text" id="drillAnswer" inputmode="decimal" autocomplete="off" placeholder="Type the answer…">
+  </section>
+
+  <!-- ============================== DRILL RESULTS SCREEN ============================== -->
+  <section id="drillResultsScreen" class="hidden">
+    <div class="results-card">
+      <h2>Drill complete</h2>
+      <div id="drillFinalScore"></div>
+      <div class="results-actions">
+        <button id="drillRetryBtn" class="start-btn">Retry</button>
+        <button id="drillReconfigBtn">Reconfigure</button>
+        <button id="drillHomeBtn">Home</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== SIMULATION RESULTS SCREEN ============================== -->
+  <section id="simResultsScreen" class="hidden">
+    <div class="results-card">
+      <h2>Session complete</h2>
+      <div id="simFinalStats"></div>
+      <div class="results-actions">
+        <button id="simRetryBtn" class="start-btn">Retry</button>
+        <button id="simReconfigBtn">Reconfigure</button>
+        <button id="simHomeBtn">Home</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toasts"></div>
+
+</div>
+
+<script src="js/blackscholes.js"></script>
+<script src="js/state.js"></script>
+<script src="js/market.js"></script>
+<script src="js/position.js"></script>
+<script src="js/simulation.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/drills.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
