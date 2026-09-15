@@ -16,7 +16,7 @@ then open `http://localhost:8000`.
 
 ## Layout
 
-- **Stock** (top middle) and **R/C** (top right, fixed reversal/conversion carry — never changes) sit above the board.
+- **Stock** (top middle) and **r/c** (top right, fixed reversal/conversion carry — never changes) sit above the board.
 - Main row, left to right: **P+S** (put + stock combo) | *call spreads* | **Calls** | **Strikes** (with call delta beneath each) | **Puts** | *put spreads* | **B/W** (stock − call).
 - **Spread Book** and **IDB** sit below the board.
 - **Position** panel (right side, if enabled) shows a payoff-at-expiration chart and total Greeks for whatever you've traded.
@@ -31,4 +31,4 @@ then open `http://localhost:8000`.
 
 ## Config
 
-Spreads on/off, spread book on/off, IDB on/off, show position on/off, trade pace (5–120s), simulation length (5–20 min), difficulty (controls how much of the board starts filled: ~10/25/50%), and certainty mode (neither / high stock certainty / high vol certainty — mutually exclusive).
+Spreads on/off, spread book on/off, IDB on/off, show position on/off, trade pace (0.5 to 4 trades/min), simulation length (5–20 min), difficulty (controls how much of the board starts filled: ~25/50/75/100%), and fix stock/vol (neither / fix stock / fix vol — mutually exclusive).
