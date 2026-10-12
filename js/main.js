@@ -27,18 +27,46 @@ function bindConfigPanel() {
     r.addEventListener('change', (e) => { if (e.target.checked) APP.config.certaintyMode = e.target.value; });
   });
 
+  const syncFixedLabel = () => {
+    $('fixedDelta1Label').textContent = APP.config.delta1 === 'future' ? 'Fixed future' : 'Fixed stock';
+  };
+  document.querySelectorAll('input[name="simDelta1"]').forEach(r => {
+    r.checked = (r.value === APP.config.delta1);
+    r.addEventListener('change', (e) => { if (e.target.checked) { APP.config.delta1 = e.target.value; syncFixedLabel(); } });
+  });
+  syncFixedLabel();
+
+  $('cfgStrikes').value = APP.config.numStrikes;
+  $('cfgStrikesLabel').textContent = String(APP.config.numStrikes);
+  $('cfgStrikes').addEventListener('input', (e) => {
+    APP.config.numStrikes = parseInt(e.target.value, 10);
+    $('cfgStrikesLabel').textContent = String(APP.config.numStrikes);
+  });
+
+  $('cfgBookView').checked = APP.config.bookView;
+  $('cfgBookView').addEventListener('change', (e) => { APP.config.bookView = e.target.checked; });
+
+  document.querySelectorAll('input[name="drillDelta1"]').forEach(r => {
+    r.checked = (r.value === APP.drillConfig.delta1);
+    r.addEventListener('change', (e) => { if (e.target.checked) APP.drillConfig.delta1 = e.target.value; });
+  });
+  // the question-type toggles only apply to the order-book view
+  const syncTypesRow = () => { $('drillTypesRow').classList.toggle('hidden', APP.drillConfig.view !== 'book'); };
+  document.querySelectorAll('input[name="drillView"]').forEach(r => {
+    r.checked = (r.value === APP.drillConfig.view);
+    r.addEventListener('change', (e) => { if (e.target.checked) { APP.drillConfig.view = e.target.value; syncTypesRow(); } });
+  });
+  $('cfgTypeArb').checked = APP.drillConfig.types.arb;
+  $('cfgTypeArb').addEventListener('change', (e) => { APP.drillConfig.types.arb = e.target.checked; });
+  $('cfgTypeTake').checked = APP.drillConfig.types.take;
+  $('cfgTypeTake').addEventListener('change', (e) => { APP.drillConfig.types.take = e.target.checked; });
+  syncTypesRow();
+
   $('cfgTradePace').value = APP.config.tradesPerMinute;
   $('cfgTradePaceLabel').textContent = `${APP.config.tradesPerMinute.toFixed(1)}/min`;
   $('cfgTradePace').addEventListener('input', (e) => {
     APP.config.tradesPerMinute = parseFloat(e.target.value);
     $('cfgTradePaceLabel').textContent = `${APP.config.tradesPerMinute.toFixed(1)}/min`;
-  });
-
-  $('cfgFillPct').value = APP.config.fillPct;
-  $('cfgFillPctLabel').textContent = `${APP.config.fillPct}%`;
-  $('cfgFillPct').addEventListener('input', (e) => {
-    APP.config.fillPct = parseInt(e.target.value, 10);
-    $('cfgFillPctLabel').textContent = `${APP.config.fillPct}%`;
   });
 
   $('cfgSimLength').value = APP.config.simLengthMin;

@@ -8,6 +8,15 @@ function cellDomId(kind, idx, book) {
   return `cell-${kind}-${idx}${book ? '-book' : ''}`;
 }
 
+// The DOM element currently showing a cell (spread-book cells live in one of two generic slots).
+function cellElement(kind, idx, book) {
+  if (book) {
+    const slot = APP.spreadBook.active.findIndex(a => a.kind === kind && a.idx === idx);
+    return slot >= 0 ? document.getElementById(`sbCell-${slot}`) : null;
+  }
+  return document.getElementById(cellDomId(kind, idx, book));
+}
+
 // Shared markup for "make a market" forms — used by board/spread-book RFQ cells and the IDB
 // panel. The customer always specifies a size up front (realistic: "I need a 2-way in 200 of
 // the March 150 calls"), so only price is ever typed. A one-sided RFQ shows the non-solicited
@@ -33,63 +42,162 @@ function rfqFormHtml({ isIdb, kind, idx, book, rfqSide, fixedBid, fixedBidSize, 
     </div>`;
 }
 
-function liveSizeHtml(total, userAmt) {
-  if (userAmt > 0 && total > userAmt) return `<span class="totalsz">x${total}</span>,<span class="usersz">x${userAmt}</span>`;
-  if (userAmt > 0) return `<span class="usersz">x${userAmt}</span>`;
-  return `<span class="totalsz">x${total}</span>`;
+// ---- order-book cells ------------------------------------------------------------
+// Main-board markets look exactly like the drills' books: a staircase ladder with offers stacked on
+// the right of a thick centre divider and bids on the left, every level an outlined cell with a size
+// bar growing out from the divider and a square Yours / Mine button. Two levels each side, plus an
+// empty level in the middle with a box on each side for quoting a new top-of-book price.
+
+// What size fills a bar completely, per instrument.
+function simMaxSize(kind) {
+  if (kind === 'stock') { const m = APP.config.certaintyMode; return m === 'stock' ? 12500 : (m === 'vol' ? 5000 : 2000); }
+  return 100;
+}
+
+function simBarStyle(kind, size, side) {
+  const pct = Math.min(100, Math.round(size / simMaxSize(kind) * 100));
+  return side === 'bid'
+    ? `background:linear-gradient(to left, rgba(34,160,80,0.34) ${pct}%, transparent ${pct}%)`
+    : `background:linear-gradient(to right, rgba(214,48,48,0.30) ${pct}%, transparent ${pct}%)`;
+}
+
+// "(x40)", with your own portion called out in green when part of it is yours
+function simSizeHtml(lv) {
+  const total = lv.size + lv.user;
+  return `<span class="sz">(x${total}${lv.user > 0 && lv.size > 0 ? `<span class="usersz"> you ${lv.user}</span>` : ''})</span>`;
+}
+
+function simHalfHtml(kind, idx, book, cell, side, level, rolling) {
+  const arr = side === 'bid' ? cell.bids : cell.asks;
+  const lv = arr[level];
+  const kb = `data-kind="${kind}" data-idx="${idx}" data-book="${book ? 1 : 0}" data-side="${side}" data-level="${level}"`;
+  if (!lv) {
+    const mark = level === 0 ? (side === 'bid' ? cell.markBid : cell.markAsk) : null;
+    if (mark != null) return `<td class="half ${side} has mark"><div class="hr"><span class="px">${fmt(mark)}</span></div></td>`;
+    return `<td class="half ${side}"></td>`;
+  }
+  const takeFrozen = APP.session.boardFrozen || !running();
+  const own = lv.size <= 0 && lv.user > 0; // nothing here but your own order
+  const btn = own
+    ? `<button class="dbtn own" data-action="own-btn" ${kb}>Cancel</button>`
+    : `<button class="dbtn ${side === 'bid' ? 'yours' : 'mine'}" data-action="take-btn" ${kb} ${(takeFrozen || level > 0) ? 'disabled' : ''}>${side === 'bid' ? 'Yours' : 'Mine'}</button>`;
+  const px = `<span class="px">${fmt(lv.px)}</span>`;
+  const inner = side === 'bid' ? simSizeHtml(lv) + px + btn : btn + px + simSizeHtml(lv);
+  const roll = rolling ? ` ${side === 'bid' ? 'roll-dn' : 'roll-up'}` : '';
+  return `<td class="half ${side} has${level === 0 ? ' best' : ''}${lv.user > 0 ? ' hasuser' : ''}" style="${simBarStyle(kind, lv.size + lv.user, side)}"><div class="hr${roll}">${inner}</div></td>`;
+}
+
+function bookHtml(kind, idx, book, cell) {
+  const anim = cell._anim || {};
+  const kb = `data-kind="${kind}" data-idx="${idx}" data-book="${book ? 1 : 0}"`;
+  let rows = '';
+  for (let i = 1; i >= 0; i--) { // offers: worst on top, best nearest the middle
+    rows += `<tr><td class="half bid"></td><td class="mid"></td>${simHalfHtml(kind, idx, book, cell, 'ask', i, anim.ask)}</tr>`;
+  }
+  // the empty middle level: type a price, press Enter, then say how many
+  rows += `<tr class="midrow"><td class="half bid has qin"><input class="px-in" type="number" step="0.05" placeholder="bid" data-side="bid" ${kb} autocomplete="off"></td>`
+    + `<td class="mid"></td><td class="half ask has qin"><input class="px-in" type="number" step="0.05" placeholder="offer" data-side="ask" ${kb} autocomplete="off"></td></tr>`;
+  for (let i = 0; i < 2; i++) { // bids: best nearest the middle
+    rows += `<tr>${simHalfHtml(kind, idx, book, cell, 'bid', i, anim.bid)}<td class="mid"></td><td class="half ask"></td></tr>`;
+  }
+  return `<div class="simbook"><table class="ladder sim">${rows}</table></div>`;
+}
+
+// Everything that isn't a full order book (verticals, the spread book): just the top prices, as
+//   (x100) 10.50 - 10.60 (x150)     with Yours / Mine underneath
+function topLineHtml(cell) {
+  const bl = cell.bids[0], al = cell.asks[0];
+  const sz = (lv) => lv ? `<sub class="szs">(x${lv.size + lv.user})</sub>` : '';
+  return `<div class="topline">${sz(bl)} <span class="pxr">${bl ? fmt(bl.px) : '—'} - ${al ? fmt(al.px) : '—'}</span> ${sz(al)}</div>`;
 }
 
 function cellHtml(kind, idx, book, cell) {
-  const notRunning = APP.session.status !== 'running';
+  const notRunning = !running();
   const takeFrozen = APP.session.boardFrozen || notRunning; // Mine/Yours: also frozen during an IDB RFQ
   const rfqFrozen = notRunning; // making a market on the board stays enabled during an IDB RFQ
   const kb = `data-kind="${kind}" data-idx="${idx}" data-book="${book ? 1 : 0}"`;
-  switch (cell.status) {
-    case 'empty':
-      return `<div class="px empty">—</div>`;
-    case 'indicative':
-      return `<div class="px indicative">${fmt(cell.bid)} - ${fmt(cell.ask)}</div>`;
-    case 'live': {
-      const userBid = cell.userBidSize || 0, userAsk = cell.userAskSize || 0;
-      const bidTradeable = cell.bidSize - userBid;
-      const askTradeable = cell.askSize - userAsk;
-      const hasUserSize = userBid > 0 || userAsk > 0;
-      return `
-        <div class="takebtns">
-          <button data-action="take" ${kb} data-side="sell" ${(takeFrozen || bidTradeable <= 0) ? 'disabled' : ''}>Yours</button>
-          <button data-action="take" ${kb} data-side="buy" ${(takeFrozen || askTradeable <= 0) ? 'disabled' : ''}>Mine</button>
-        </div>
-        <div class="px live">${fmt(cell.bid)} - ${fmt(cell.ask)}</div>
-        <div class="sizes"><span>${liveSizeHtml(cell.bidSize, userBid)}</span><span>${liveSizeHtml(cell.askSize, userAsk)}</span></div>
-        ${hasUserSize ? `<button data-action="pull" class="pullbtn" ${kb} ${takeFrozen ? 'disabled' : ''}>Pull</button>` : ''}`;
-    }
-    case 'rfq':
-      return rfqFormHtml({
-        isIdb: false, kind, idx, book,
-        rfqSide: cell.rfqSide,
-        fixedBid: cell.bid, fixedBidSize: cell._fixedBidSize,
-        fixedAsk: cell.ask, fixedAskSize: cell._fixedAskSize,
-        volume: cell.rfqVolume,
-        disabled: rfqFrozen,
-      });
+
+  if (cell.rfqSide) {
+    return rfqFormHtml({
+      isIdb: false, kind, idx, book,
+      rfqSide: cell.rfqSide,
+      fixedBid: cell._refBid ? cell._refBid.px : null, fixedBidSize: cell._refBid ? cell._refBid.size : null,
+      fixedAsk: cell._refAsk ? cell._refAsk.px : null, fixedAskSize: cell._refAsk ? cell._refAsk.size : null,
+      volume: cell.rfqVolume,
+      disabled: rfqFrozen,
+    });
   }
-  return '';
+  if (levelCap(kind, book) > 1) return bookHtml(kind, idx, book, cell);
+
+  // top prices only
+  if (!hasLevels(cell)) {
+    if (cell.status === 'indicative') return `<div class="topline mark">${fmt(cell.bid)} - ${fmt(cell.ask)}</div>`;
+    return `<div class="topline empty">—</div>`;
+  }
+  const bl = cell.bids[0], al = cell.asks[0];
+  const hasUserSize = userHasOrders(cell);
+  return `
+    ${topLineHtml(cell)}
+    <div class="takebtns">
+      <button class="dbtn yours" data-action="take" ${kb} data-side="sell" ${(takeFrozen || !bl || bl.size <= 0) ? 'disabled' : ''}>Yours</button>
+      <button class="dbtn mine" data-action="take" ${kb} data-side="buy" ${(takeFrozen || !al || al.size <= 0) ? 'disabled' : ''}>Mine</button>
+    </div>
+    ${hasUserSize ? `<button data-action="pull" class="pullbtn" ${kb} ${takeFrozen ? 'disabled' : ''}>Pull</button>` : ''}`;
+}
+
+// Only a *new best price* rolls its side's levels (the new best pushes the rest back): bids roll down,
+// offers roll up, and only the side that got the update moves. Trades and removals don't animate.
+function sideRoll(side, prev, cur) {
+  if (!prev || cur[0] === undefined || prev[0] === cur[0]) return false;
+  if (prev[0] === undefined) return true;
+  return side === 'bid' ? cur[0] > prev[0] : cur[0] < prev[0];
+}
+
+// A typed-but-unsubmitted quote (and the caret) must survive the constant re-rendering.
+function captureQuoteInputs(el) {
+  const saved = {};
+  el.querySelectorAll('.px-in').forEach(inp => {
+    saved[inp.dataset.side] = { value: inp.value, focus: document.activeElement === inp, caret: inp.selectionStart };
+  });
+  return saved;
+}
+function restoreQuoteInputs(el, saved) {
+  el.querySelectorAll('.px-in').forEach(inp => {
+    const s = saved[inp.dataset.side];
+    if (!s) return;
+    if (s.value !== '') inp.value = s.value;
+    if (s.focus) { inp.focus(); try { inp.setSelectionRange(s.caret, s.caret); } catch (e) { /* number inputs don't expose a caret */ } }
+  });
 }
 
 function renderCellDom(kind, idx, book) {
   const cell = getCell(kind, idx, book);
-  const el = document.getElementById(cellDomId(kind, idx, book));
+  const el = cellElement(kind, idx, book);
   if (!el || !cell) return;
-  if (cell.status === 'rfq' && cell._domStatus === 'rfq') return; // don't clobber in-progress typing
-  const priceChanged = cell.status === 'live' && cell._domStatus === 'live' &&
+  el.classList.toggle('rfq-active', !!cell.rfqSide);
+  if (cell.rfqSide && cell._domRfq) return; // don't clobber in-progress typing
+  cell._domRfq = !!cell.rfqSide;
+
+  const sig = { bids: cell.bids.map(l => l.px), asks: cell.asks.map(l => l.px) };
+  cell._anim = { bid: sideRoll('bid', el._sig && el._sig.bids, sig.bids), ask: sideRoll('ask', el._sig && el._sig.asks, sig.asks) };
+  el._sig = sig;
+
+  const singlePrice = levelCap(kind, book) === 1 && !cell.rfqSide;
+  const priceChanged = singlePrice && cell.status === 'live' && cell._domStatus === 'live' &&
     (el.dataset.lastBid !== String(cell.bid) || el.dataset.lastAsk !== String(cell.ask));
   cell._domStatus = cell.status;
-  el.innerHTML = cellHtml(kind, idx, book, cell);
-  applyLiveFlash(el, cell, priceChanged);
+  const html = (kind === 'stock' ? `<div class="ih">${delta1Name()}</div>` : '') + cellHtml(kind, idx, book, cell);
+  // nothing changed on screen: leave the DOM alone (keeps animations running and typing undisturbed)
+  const key = html.replace(/ roll-(?:dn|up)/g, '');
+  if (key === el._htmlKey && !cell._anim.bid && !cell._anim.ask) return;
+  const saved = captureQuoteInputs(el);
+  el.innerHTML = html;
+  el._htmlKey = key;
+  restoreQuoteInputs(el, saved);
+  if (singlePrice) applyLiveFlash(el, cell, priceChanged);
 }
 
-// Tracks each live cell's last-rendered bid/ask so a genuine price change (not just a size
-// change) can trigger a brief flash — 2s, light yellow, per instrument.
+// Single-price view only: a genuine price change (not just a size change) gets a brief 2s flash.
 function applyLiveFlash(el, cell, priceChanged) {
   if (cell.status !== 'live') { delete el.dataset.lastBid; delete el.dataset.lastAsk; return; }
   el.dataset.lastBid = String(cell.bid);
@@ -101,32 +209,69 @@ function applyLiveFlash(el, cell, priceChanged) {
   setTimeout(() => el.classList.remove('price-flash'), 2000);
 }
 
+// ---- 3-second border flashes: the flow panel and the market where something just happened -----
+
+function flashEl(el, color) {
+  if (!el) return;
+  ['flash-red', 'flash-green'].forEach(c => el.classList.remove(c));
+  void el.offsetWidth; // restart the animation
+  el.classList.add(`flash-${color}`);
+  clearTimeout(el._flashT);
+  el._flashT = setTimeout(() => el.classList.remove(`flash-${color}`), 3000);
+}
+function flashFlowPanel(color) { flashEl(document.getElementById('flowSection'), color); }
+function flashCell(kind, idx, book, color) { flashEl(cellElement(kind, idx, book), color); }
+
+// ---- board skeleton ------------------------------------------------------------
+
 function buildSkeleton() {
   const strikes = APP.market.strikes;
+  const N = strikes.length;
+  const future = isFutureMode();
 
+  const board = document.getElementById('boardArea');
+  board.className = `n-${N}${APP.config.bookView ? ' bookview' : ''}${future ? ' future-mode' : ''}`;
+
+  document.getElementById('rcBox').classList.toggle('hidden', future);
   document.getElementById('rcBox').innerHTML = `
     <div class="rc-label">R/C</div>
     <div class="rc-value">${fmtSigned(APP.market.rc)}</div>`;
+  document.getElementById('stockBox').innerHTML = '';
+  const sb = document.getElementById('stockBox');
+  sb._sig = null;
+  sb._htmlKey = null;
+
+  const cols = future
+    ? { callSpread: 1, call: 2, strike: 3, put: 4, putSpread: 5, straddle: 6 }
+    : { ps: 1, callSpread: 2, call: 3, strike: 4, put: 5, putSpread: 6, bw: 7 };
+  // the books need width (they're ladders), so the strike column and the spread gutters stay slim
+  const tmpl = future ? '0.7fr 1fr 0.45fr 1fr 0.7fr 1fr' : '1fr 0.7fr 1fr 0.5fr 1fr 0.7fr 1fr';
+  const mainRow = document.getElementById('mainRow');
+  const colHeaders = document.getElementById('colHeaders');
+  mainRow.style.gridTemplateColumns = tmpl;
+  mainRow.style.gridTemplateRows = `repeat(${N}, minmax(0, 1fr))`;
+  colHeaders.style.gridTemplateColumns = tmpl;
 
   let main = '';
-  for (let i = 0; i < 5; i++) main += `<div class="cell" id="cell-ps-${i}" style="grid-column:1; grid-row:${i + 1};"></div>`;
-  for (let i = 0; i < 4; i++) main += `<div class="cell spreadcell callSpreadItem" id="cell-callSpread-${i}" style="grid-column:2; grid-row:${i + 1} / span 2;"></div>`;
-  for (let i = 0; i < 5; i++) main += `<div class="cell" id="cell-call-${i}" style="grid-column:3; grid-row:${i + 1};"></div>`;
-  for (let i = 0; i < 5; i++) main += `
-    <div class="strikecell" style="grid-column:4; grid-row:${i + 1};">
+  const mk = (kind, i, extraCls, rowStyle) => `<div class="cell ${extraCls || ''}" id="cell-${kind}-${i}" style="grid-column:${cols[kind]}; ${rowStyle || `grid-row:${i + 1};`}"></div>`;
+  (future ? ['call', 'put', 'straddle'] : ['ps', 'call', 'put', 'bw']).forEach(kind => {
+    for (let i = 0; i < N; i++) main += mk(kind, i);
+  });
+  for (let i = 0; i < N - 1; i++) {
+    main += mk('callSpread', i, 'spreadcell callSpreadItem', `grid-row:${i + 1} / span 2;`);
+    main += mk('putSpread', i, 'spreadcell putSpreadItem', `grid-row:${i + 1} / span 2;`);
+  }
+  for (let i = 0; i < N; i++) main += `
+    <div class="strikecell" style="grid-column:${cols.strike}; grid-row:${i + 1};">
       <div class="strikeval">${strikes[i]}</div>
       <div class="calldelta" id="callDelta-${i}"></div>
     </div>`;
-  for (let i = 0; i < 5; i++) main += `<div class="cell" id="cell-put-${i}" style="grid-column:5; grid-row:${i + 1};"></div>`;
-  for (let i = 0; i < 4; i++) main += `<div class="cell spreadcell putSpreadItem" id="cell-putSpread-${i}" style="grid-column:6; grid-row:${i + 1} / span 2;"></div>`;
-  for (let i = 0; i < 5; i++) main += `<div class="cell" id="cell-bw-${i}" style="grid-column:7; grid-row:${i + 1};"></div>`;
-  document.getElementById('mainRow').innerHTML = main;
+  mainRow.innerHTML = main;
 
-  document.getElementById('colHeaders').innerHTML = `
-    <div style="grid-column:1">P + S</div><div style="grid-column:2"></div>
-    <div style="grid-column:3">Calls</div><div style="grid-column:4">Strikes</div>
-    <div style="grid-column:5">Puts</div><div style="grid-column:6"></div>
-    <div style="grid-column:7">B/W</div>`;
+  const hdr = future
+    ? ['', 'Calls', 'Strikes', 'Puts', '', 'Straddles']
+    : ['P + S', '', 'Calls', 'Strikes', 'Puts', '', 'B/W'];
+  colHeaders.innerHTML = hdr.map((h, i) => `<div style="grid-column:${i + 1}">${h}</div>`).join('');
 
   document.getElementById('spreadBookRow').innerHTML = `
     <div class="spreadbook-item"><div class="spreadbook-label" id="sbLabel-0">—</div><div class="cell" id="sbCell-0"><div class="px empty">no active market</div></div></div>
@@ -150,24 +295,23 @@ function buildSkeleton() {
 
 function renderAll() {
   renderClock();
+  const N = APP.market.strikes.length;
   renderCellDom('stock', 0, false);
-  for (let i = 0; i < 5; i++) {
-    renderCellDom('ps', i, false);
-    renderCellDom('call', i, false);
-    renderCellDom('put', i, false);
-    renderCellDom('bw', i, false);
+  const kinds = mainOptionKinds();
+  for (let i = 0; i < N; i++) {
+    kinds.forEach(kind => renderCellDom(kind, i, false));
     const d = document.getElementById(`callDelta-${i}`);
-    if (d) d.textContent = 'Δ ' + fmt(BS.greeks(currentSpot(), APP.market.strikes[i], APP.market.T, APP.CONST.R, APP.CONST.Q, currentVol(), 'call').delta * 100);
+    if (d) d.textContent = 'Δ ' + fmt(BS.greeks(currentSpot(), APP.market.strikes[i], APP.market.T, mktR(), mktQ(), currentVol(), 'call').delta * 100);
   }
   if (APP.config.spreadsOn) {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < N - 1; i++) {
       renderCellDom('callSpread', i, false);
       renderCellDom('putSpread', i, false);
     }
   }
   if (APP.config.spreadBookOn) renderSpreadBookPanel();
   if (APP.config.idbOn) renderIDBPanel();
-  renderAlerts();
+  renderFlow();
   if (APP.config.showPosition) renderPositionPanel();
   renderStatusBanner();
   updateSpreadLines();
@@ -181,18 +325,29 @@ function renderSpreadBookPanel() {
     const labelEl = document.getElementById(`sbLabel-${slot}`);
     const cellEl = document.getElementById(`sbCell-${slot}`);
     if (!labelEl || !cellEl) continue;
+    const item = cellEl.closest('.spreadbook-item');
     if (!active) {
       labelEl.textContent = '—';
       cellEl.innerHTML = `<div class="px empty">no active market</div>`;
+      if (item) item.classList.remove('rfq-active');
+      cellEl._slotKey = null;
+      cellEl._htmlKey = null;
       continue;
     }
     const cell = spreadBookCellFor(active.kind, active.idx);
     labelEl.textContent = describeInstrument(active.kind, active.idx, false);
-    if (cell.status === 'rfq' && cell._domSlotStatus === 'rfq') continue; // preserve in-progress typing
+    if (item) item.classList.toggle('rfq-active', !!cell.rfqSide);
+    const key = `${active.kind}_${active.idx}`;
+    if (cell.rfqSide && cell._domSlotRfq && cellEl._slotKey === key) continue; // preserve in-progress typing
+    cellEl._slotKey = key;
+    cell._domSlotRfq = !!cell.rfqSide;
     const priceChanged = cell.status === 'live' && cell._domSlotStatus === 'live' &&
       (cellEl.dataset.lastBid !== String(cell.bid) || cellEl.dataset.lastAsk !== String(cell.ask));
     cell._domSlotStatus = cell.status;
-    cellEl.innerHTML = cellHtml(active.kind, active.idx, true, cell);
+    const html = cellHtml(active.kind, active.idx, true, cell);
+    if (html === cellEl._htmlKey) continue;
+    cellEl.innerHTML = html;
+    cellEl._htmlKey = html;
     applyLiveFlash(cellEl, cell, priceChanged);
   }
 }
@@ -201,7 +356,10 @@ function renderStatusBanner() {
   const el = document.getElementById('statusBanner');
   if (!el) return;
   if (APP.session.status === 'ended') el.textContent = 'Session complete.';
-  else if (APP.session.status === 'running') el.textContent = APP.session.boardFrozen ? 'IDB request in progress — board trading frozen.' : 'Session running.';
+  else if (APP.session.status === 'running') {
+    el.textContent = APP.session.boardFrozen ? 'IDB request in progress — board trading frozen.'
+      : (APP.session.phase === 'setup' ? `Setting up: ${setupLeft()} to make — clock paused` : 'Session running.');
+  }
   else el.textContent = '';
   if (typeof setConfigDisabled === 'function') setConfigDisabled(APP.session.status === 'running');
 }
@@ -210,13 +368,15 @@ function renderConfigSummary() {
   const el = document.getElementById('summaryText');
   if (!el) return;
   const c = APP.config;
-  const certaintyLabel = c.certaintyMode === 'stock' ? 'fixed stock'
+  const d1 = c.delta1 === 'future' ? 'future' : 'stock';
+  const certaintyLabel = c.certaintyMode === 'stock' ? `fixed ${d1}`
     : c.certaintyMode === 'vol' ? 'fixed vol' : 'neither fixed';
   const parts = [
-    `Board fill: ${c.fillPct}%`,
+    `${d1} · ${c.numStrikes} strike${c.numStrikes > 1 ? 's' : ''}`,
     certaintyLabel,
     `Trade pace: ${c.tradesPerMinute.toFixed(1)}/min`,
     `Length: ${c.simLengthMin}m`,
+    c.bookView ? 'order book' : 'single price',
     c.spreadsOn ? 'spreads on' : 'spreads off',
     c.spreadBookOn ? 'spread book on' : 'spread book off',
     c.idbOn ? 'IDB on' : 'IDB off',
@@ -224,10 +384,12 @@ function renderConfigSummary() {
     c.startWithPosition ? 'starting position' : '',
   ].filter(Boolean);
   el.textContent = parts.join(' · ');
+  el.title = el.textContent; // the bar truncates a long summary; the full text is on hover
 }
 
 function showScreen(name) {
   APP.ui.screen = name;
+  if (name !== 'session') closeTicket();
   const ids = {
     home: 'homeScreen',
     simConfig: 'simConfigScreen',
@@ -257,6 +419,7 @@ function renderClock() {
 function renderIDBPanel() {
   const active = APP.idb.active;
   const box = document.getElementById('idbActive');
+  document.getElementById('idbSection').classList.toggle('rfq-active', !!active && active.status === 'awaiting_market');
   if (active) {
     if (active.status === 'awaiting_market' && APP.idb._domStatus === 'awaiting_market') {
       // preserve in-progress typing
@@ -289,22 +452,21 @@ function renderIDBPanel() {
   }).join('');
 }
 
-// ---- alerts & toasts --------------------------------------------------------
+// ---- flow panel & toasts -----------------------------------------------------
 
-function triggerAlert(text, kind) {
-  const a = { id: APP.util.uid(), text, kind: kind === 'red' ? 'red' : 'yellow' };
-  APP.alerts.unshift(a);
-  renderAlerts();
-  setTimeout(() => {
-    APP.alerts = APP.alerts.filter(x => x.id !== a.id);
-    renderAlerts();
-  }, 10000);
-}
-
-function renderAlerts() {
-  const el = document.getElementById('alerts');
+// Every trade and every more-competitive customer price, newest first:
+//   red = a trade with you, yellow = a trade between others, blue = you took a price,
+//   green = a customer improved / posted a price.
+function renderFlow() {
+  const el = document.getElementById('flow');
   if (!el) return;
-  el.innerHTML = APP.alerts.map(a => `<div class="alertbox alert-${a.kind}">${a.text}</div>`).join('');
+  const html = APP.history.slice(0, 80).map(h => {
+    const mm = Math.floor(h.ts / 60), ss = Math.floor(h.ts % 60);
+    return `<div class="flowbox flow-${h.color}"><span class="flow-time">${mm}:${ss.toString().padStart(2, '0')}</span> ${h.text}</div>`;
+  }).join('');
+  if (html === el._html) return;
+  el._html = html;
+  el.innerHTML = html;
 }
 
 function toast(text) {
@@ -315,6 +477,117 @@ function toast(text) {
   div.textContent = text;
   el.appendChild(div);
   setTimeout(() => div.remove(), 3800);
+}
+
+// ---- order ticket: take a level / rest an order / manage your own ----------------
+
+function closeTicket() {
+  APP.ui.ticket = null;
+  const t = document.getElementById('ticket');
+  if (t) { t.classList.add('hidden'); t.innerHTML = ''; }
+}
+
+function ticketHtml(t) {
+  const desc = describeInstrument(t.kind, t.idx, t.book);
+  const chips = [5, 10, 25, 50, 100].map(v => `<button class="tk-chip" data-action="tk-size" data-v="${v}">${v}</button>`).join('')
+    + (t.maxQty ? `<button class="tk-chip" data-action="tk-size" data-v="${t.maxQty}">Max</button>` : '');
+  if (t.mode === 'take') {
+    const verb = t.side === 'buy' ? 'Buy' : 'Sell';
+    return `
+      <div class="tk-title">${verb} ${desc} @ <b>${fmt(t.px)}</b></div>
+      <div class="tk-sub">${t.maxQty} available</div>
+      <div class="tk-row"><label>Size <input id="tkSize" type="number" min="1" step="1" value="${t.defaultQty}"></label></div>
+      <div class="tk-chips">${chips}</div>
+      <div class="tk-row"><button class="tk-go" data-action="tk-confirm">${verb}</button>
+        ${t.ownSize > 0 ? `<button data-action="tk-cancel-own">Cancel my ${t.ownSize}</button>` : ''}
+        <button data-action="tk-close">Close</button></div>
+      <div class="tk-err" id="tkErr"></div>`;
+  }
+  if (t.mode === 'place') {
+    return `
+      <div class="tk-title">New ${t.side === 'bid' ? 'bid' : 'offer'} in ${desc}</div>
+      <div class="tk-row"><label>Price <input id="tkPx" type="number" step="0.05" value="${t.defaultPx != null ? fmt(t.defaultPx) : ''}"></label>
+        <label>Size <input id="tkSize" type="number" min="1" step="1" value="${t.defaultQty}"></label></div>
+      <div class="tk-chips">${chips}</div>
+      <div class="tk-row"><button class="tk-go" data-action="tk-confirm">Confirm</button><button data-action="tk-close">Close</button></div>
+      <div class="tk-err" id="tkErr"></div>`;
+  }
+  return `
+    <div class="tk-title">Your ${t.side === 'bid' ? 'bid' : 'offer'} in ${desc}</div>
+    <div class="tk-sub">${t.ownSize} @ ${fmt(t.px)}</div>
+    <div class="tk-row"><button class="tk-go" data-action="tk-cancel-own">Cancel order</button><button data-action="tk-close">Close</button></div>
+    <div class="tk-err" id="tkErr"></div>`;
+}
+
+function openTicket(t, anchorEl) {
+  APP.ui.ticket = t;
+  const el = document.getElementById('ticket');
+  el.innerHTML = ticketHtml(t);
+  el.classList.remove('hidden');
+  const r = anchorEl.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let left = r.left + r.width / 2 - w / 2, top = r.bottom + 4;
+  if (top + h > window.innerHeight - 6) top = Math.max(6, r.top - h - 4);
+  left = Math.max(6, Math.min(left, window.innerWidth - w - 6));
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  const first = el.querySelector('#tkPx') || el.querySelector('#tkSize');
+  if (first) { first.focus(); first.select(); }
+}
+
+// Clicking Yours / Mine on a book's best price opens the size ticket (you take that price, up to the
+// other participants' size there). Clicking Cancel on a level that's only yours opens the cancel ticket.
+function onTakeBtn(btn) {
+  if (!running()) return;
+  const d = btn.dataset;
+  const kind = d.kind, idx = parseInt(d.idx, 10), book = d.book === '1', side = d.side;
+  const cell = getCell(kind, idx, book);
+  if (!cell || cell.rfqSide) return;
+  const lvl = (side === 'bid' ? cell.bids : cell.asks)[0];
+  if (!lvl || lvl.size <= 0) return;
+  openTicket({
+    mode: 'take', kind, idx, book, side: side === 'bid' ? 'sell' : 'buy', // Yours hits the bid, Mine lifts the offer
+    px: lvl.px, maxQty: lvl.size, ownSize: lvl.user,
+    defaultQty: kind === 'stock' ? Math.min(lvl.size, 100) : lvl.size,
+  }, btn);
+}
+
+function onOwnBtn(btn) {
+  if (!running()) return;
+  const d = btn.dataset;
+  const kind = d.kind, idx = parseInt(d.idx, 10), book = d.book === '1', side = d.side, level = parseInt(d.level, 10);
+  const cell = getCell(kind, idx, book);
+  const lvl = cell && (side === 'bid' ? cell.bids : cell.asks)[level];
+  if (!lvl) return;
+  openTicket({ mode: 'own', kind, idx, book, side, px: lvl.px, ownSize: lvl.user }, btn);
+}
+
+// A price typed into the empty middle level: press Enter, then the ticket asks how many.
+function onQuoteEnter(inp) {
+  if (!running()) return;
+  const px = parseFloat(inp.value);
+  if (isNaN(px)) { toast('Type a price first.'); return; }
+  const d = inp.dataset;
+  const kind = d.kind, idx = parseInt(d.idx, 10), book = d.book === '1';
+  openTicket({ mode: 'place', kind, idx, book, side: d.side, defaultPx: px, defaultQty: kind === 'stock' ? 100 : 10 }, inp);
+}
+
+function ticketConfirm() {
+  const t = APP.ui.ticket;
+  if (!t) return;
+  const errEl = document.getElementById('tkErr');
+  const size = parseInt(document.getElementById('tkSize').value, 10);
+  let res;
+  if (t.mode === 'take') res = executeUserTake(t.kind, t.idx, t.book, t.side, size);
+  else res = placeUserOrder(t.kind, t.idx, t.book, t.side, parseFloat(document.getElementById('tkPx').value), size);
+  if (res.error) { errEl.textContent = res.error; return; }
+  if (t.mode === 'place') { // the quote went in: empty the box it came from
+    document.querySelectorAll('.px-in').forEach(inp => {
+      const d = inp.dataset;
+      if (d.kind === t.kind && parseInt(d.idx, 10) === t.idx && (d.book === '1') === !!t.book && d.side === t.side) inp.value = '';
+    });
+  }
+  closeTicket();
 }
 
 // ---- call/put spread connector lines -----------------------------------------
@@ -342,7 +615,7 @@ function updateSpreadLines() {
   svg.setAttribute('width', crect.width);
   svg.setAttribute('height', crect.height);
   let html = '';
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < APP.market.strikes.length - 1; i++) {
     html += lineBetween(`cell-callSpread-${i}`, `cell-call-${i}`, crect, 'right', 'left', 0.25);
     html += lineBetween(`cell-callSpread-${i}`, `cell-call-${i + 1}`, crect, 'right', 'left', 0.75);
     html += lineBetween(`cell-putSpread-${i}`, `cell-put-${i}`, crect, 'left', 'right', 0.25);
@@ -351,7 +624,7 @@ function updateSpreadLines() {
   svg.innerHTML = html;
 }
 
-// ---- position panel: payoff chart + greeks ----------------------------------
+// ---- position panel: expiry payoff + today's Black-Scholes curve, plus greeks ------
 
 function renderPositionPanel() {
   const canvas = document.getElementById('payoffChart');
@@ -359,15 +632,20 @@ function renderPositionPanel() {
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
 
+  // centred on the strikes, reaching only a little (10) beyond the outermost ones either side
   const spot = currentSpot();
-  const lo = spot * 0.6, hi = spot * 1.4;
+  const strikes = APP.market.strikes;
+  const margin = Math.max(10, 2 * APP.market.incr);
+  const lo = Math.min(...strikes) - margin, hi = Math.max(...strikes) + margin;
   const N = 120;
-  const pts = [];
+  const has = hasPosition();
+  const expiry = [], today = [];
   for (let i = 0; i <= N; i++) {
     const ST = lo + (hi - lo) * i / N;
-    pts.push([ST, hasPosition() ? payoffAt(ST) : 0]);
+    expiry.push([ST, has ? payoffAt(ST) : 0]);
+    today.push([ST, has ? bsPnlAt(ST) : 0]);
   }
-  const vals = pts.map(p => p[1]);
+  const vals = expiry.concat(today).map(p => p[1]);
   const minV = Math.min(0, ...vals), maxV = Math.max(0, ...vals);
   const pad = 30;
   const xScale = (ST) => pad + (W - 2 * pad) * (ST - lo) / (hi - lo);
@@ -377,24 +655,36 @@ function renderPositionPanel() {
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(pad, yScale(0)); ctx.lineTo(W - pad, yScale(0)); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(xScale(spot), pad); ctx.lineTo(xScale(spot), H - pad); ctx.setLineDash([4, 4]);
-  ctx.strokeStyle = '#bbb'; ctx.stroke(); ctx.setLineDash([]);
+  // faint verticals at each strike (labelled below), a dashed one at the spot price
+  ctx.strokeStyle = '#e4e4e4';
+  strikes.forEach(K => { ctx.beginPath(); ctx.moveTo(xScale(K), pad); ctx.lineTo(xScale(K), H - pad); ctx.stroke(); });
+  if (spot >= lo && spot <= hi) {
+    ctx.beginPath();
+    ctx.moveTo(xScale(spot), pad); ctx.lineTo(xScale(spot), H - pad); ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = '#999'; ctx.stroke(); ctx.setLineDash([]);
+  }
 
-  ctx.strokeStyle = '#2563eb';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  pts.forEach(([ST, v], i) => {
-    const x = xScale(ST), y = yScale(v);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  const trace = (pts, color, width) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    pts.forEach(([ST, v], i) => {
+      const x = xScale(ST), y = yScale(v);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  };
+  trace(today, '#f59e0b', 2);
+  trace(expiry, '#2563eb', 2);
 
-  ctx.fillStyle = '#666';
   ctx.font = '11px sans-serif';
-  ctx.fillText(fmt(lo), pad, H - 10);
-  ctx.fillText(fmt(hi), W - pad - 30, H - 10);
-  ctx.fillText(`spot ${fmt(spot)}`, xScale(spot) + 4, pad + 10);
+  ctx.fillStyle = '#666';
+  ctx.textAlign = 'center';
+  strikes.forEach(K => ctx.fillText(String(K), xScale(K), H - 12));
+  ctx.textAlign = 'left';
+  if (spot >= lo && spot <= hi) ctx.fillText(`spot ${fmt(spot)}`, xScale(spot) + 4, pad + 10);
+  ctx.fillStyle = '#2563eb'; ctx.fillText('— Expiry', pad, 14);
+  ctx.fillStyle = '#f59e0b'; ctx.fillText('— Today (BS)', pad + 64, 14);
 
   const g = currentGreeksTotal();
   document.getElementById('greeksRow').innerHTML = `
@@ -409,30 +699,50 @@ function renderPositionPanel() {
 
 function bindEvents() {
   document.getElementById('app').addEventListener('click', (e) => {
-    const btn = e.target.closest('button');
-    if (!btn) return;
-    const action = btn.dataset.action;
-    if (action === 'take') {
-      const { kind, idx, book, side } = btn.dataset;
+    const target = e.target.closest('[data-action]');
+    const inTicket = e.target.closest('#ticket');
+    if (!inTicket) closeTicket();
+    if (!target) return;
+    const action = target.dataset.action;
+    if (action === 'take-btn') {
+      onTakeBtn(target);
+    } else if (action === 'own-btn') {
+      onOwnBtn(target);
+    } else if (action === 'tk-close') {
+      closeTicket();
+    } else if (action === 'tk-confirm') {
+      ticketConfirm();
+    } else if (action === 'tk-size') {
+      const inp = document.getElementById('tkSize');
+      if (inp) inp.value = target.dataset.v;
+    } else if (action === 'tk-cancel-own') {
+      const t = APP.ui.ticket;
+      if (t) {
+        const bookSide = t.mode === 'own' ? t.side : (t.side === 'buy' ? 'ask' : 'bid');
+        closeTicket();
+        cancelUserOrders(t.kind, t.idx, t.book, bookSide);
+      }
+    } else if (action === 'take') {
+      const { kind, idx, book, side } = target.dataset;
       handleTake(kind, parseInt(idx, 10), book === '1', side);
     } else if (action === 'pull') {
-      const { kind, idx, book } = btn.dataset;
+      const { kind, idx, book } = target.dataset;
       handlePull(kind, parseInt(idx, 10), book === '1');
     } else if (action === 'submit-market') {
-      const { kind, idx, book } = btn.dataset;
+      const { kind, idx, book } = target.dataset;
       const cell = getCell(kind, parseInt(idx, 10), book === '1');
-      const box = btn.closest('.rfqbox');
+      const box = target.closest('.rfqbox');
       const bidInput = box.querySelector('.rfq-bid-px');
       const askInput = box.querySelector('.rfq-ask-px');
-      const bid = bidInput ? parseFloat(bidInput.value) : cell.bid;
-      const ask = askInput ? parseFloat(askInput.value) : cell.ask;
-      const bidSize = bidInput ? cell.rfqVolume : cell._fixedBidSize;
-      const askSize = askInput ? cell.rfqVolume : cell._fixedAskSize;
+      const bid = bidInput ? parseFloat(bidInput.value) : (cell._refBid ? cell._refBid.px : NaN);
+      const ask = askInput ? parseFloat(askInput.value) : (cell._refAsk ? cell._refAsk.px : NaN);
+      const bidSize = bidInput ? cell.rfqVolume : (cell._refBid ? cell._refBid.size : 0);
+      const askSize = askInput ? cell.rfqVolume : (cell._refAsk ? cell._refAsk.size : 0);
       const res = submitMarket(kind, parseInt(idx, 10), book === '1', bid, ask, bidSize, askSize, false);
       if (res.error) box.querySelector('.rfq-err').textContent = res.error;
     } else if (action === 'submit-idb-market') {
       const active = APP.idb.active;
-      const box = btn.closest('.rfqbox');
+      const box = target.closest('.rfqbox');
       const bidInput = box.querySelector('.rfq-bid-px');
       const askInput = box.querySelector('.rfq-ask-px');
       const bid = bidInput ? parseFloat(bidInput.value) : active.fixedBid;
@@ -442,6 +752,12 @@ function bindEvents() {
       const res = submitMarket(active.kind, active.idx, false, bid, ask, bidSize, askSize, true);
       if (res.error) box.querySelector('.rfq-err').textContent = res.error;
     }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('px-in')) { onQuoteEnter(e.target); return; }
+    if (!APP.ui.ticket) return;
+    if (e.key === 'Escape') closeTicket();
+    else if (e.key === 'Enter' && e.target.closest && e.target.closest('#ticket')) ticketConfirm();
   });
   window.addEventListener('resize', () => updateSpreadLines());
 }

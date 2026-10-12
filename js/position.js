@@ -113,6 +113,25 @@ function addTrade(kind, idx, side, qty, price) {
       legs.push({ type: 'put', strike: kLo, qty: -s, entryPrice: fpLo });
       break;
     }
+    case 'butterfly': {
+      // buy = long the two wing calls, short two of the body call
+      const [i, j, k] = decodeTriple(idx);
+      const fcj = fairCall(strikes[j]), fck = fairCall(strikes[k]);
+      legs.push({ type: 'call', strike: strikes[i], qty: s, entryPrice: price + 2 * fcj - fck });
+      legs.push({ type: 'call', strike: strikes[j], qty: -2 * s, entryPrice: fcj });
+      legs.push({ type: 'call', strike: strikes[k], qty: s, entryPrice: fck });
+      break;
+    }
+    case 'condor': {
+      // buy = long the outer calls, short the two inner calls
+      const [i, j, k, l] = decodeQuad(idx);
+      const fcj = fairCall(strikes[j]), fck = fairCall(strikes[k]), fcl = fairCall(strikes[l]);
+      legs.push({ type: 'call', strike: strikes[i], qty: s, entryPrice: price + fcj + fck - fcl });
+      legs.push({ type: 'call', strike: strikes[j], qty: -s, entryPrice: fcj });
+      legs.push({ type: 'call', strike: strikes[k], qty: -s, entryPrice: fck });
+      legs.push({ type: 'call', strike: strikes[l], qty: s, entryPrice: fcl });
+      break;
+    }
   }
   legs.forEach(l => { l.time = APP.session.elapsedSec; APP.position.legs.push(l); });
 }
@@ -127,8 +146,20 @@ function payoffAt(ST) {
   return total;
 }
 
+// P&L if the position is marked at today's Black-Scholes value with the underlying at ST (time and
+// vol held where they are now) — the smooth companion to payoffAt()'s expiry hockey stick.
+function bsPnlAt(ST) {
+  const T = APP.market.T, r = mktR(), q = mktQ(), vol = currentVol();
+  let total = 0;
+  APP.position.legs.forEach(l => {
+    if (l.type === 'stock') { total += l.qty * (ST - l.entryPrice); return; }
+    total += l.qty * 100 * (BS.price(ST, l.strike, T, r, q, vol, l.type) - l.entryPrice);
+  });
+  return total;
+}
+
 function currentGreeksTotal() {
-  const S = currentSpot(), T = APP.market.T, r = APP.CONST.R, q = APP.CONST.Q, vol = currentVol();
+  const S = currentSpot(), T = APP.market.T, r = mktR(), q = mktQ(), vol = currentVol();
   const tot = { delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
   APP.position.legs.forEach(l => {
     if (l.type === 'stock') {
