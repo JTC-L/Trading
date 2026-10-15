@@ -43,6 +43,30 @@ function bindConfigPanel() {
     $('cfgStrikesLabel').textContent = String(APP.config.numStrikes);
   });
 
+  document.querySelectorAll('input[name="simTick"]').forEach(r => {
+    r.checked = (parseFloat(r.value) === APP.config.tick);
+    r.addEventListener('change', (e) => { if (e.target.checked) APP.config.tick = parseFloat(e.target.value); });
+  });
+
+  // timed sessions have a pace and a length; step-by-step ones have a number of steps instead
+  const syncModeRows = () => {
+    const steps = APP.config.mode === 'steps';
+    $('cfgPaceRow').classList.toggle('hidden', steps);
+    $('cfgLengthRow').classList.toggle('hidden', steps);
+    $('cfgStepsRow').classList.toggle('hidden', !steps);
+  };
+  document.querySelectorAll('input[name="simMode"]').forEach(r => {
+    r.checked = (r.value === APP.config.mode);
+    r.addEventListener('change', (e) => { if (e.target.checked) { APP.config.mode = e.target.value; syncModeRows(); } });
+  });
+  $('cfgSteps').value = APP.config.steps;
+  $('cfgStepsLabel').textContent = String(APP.config.steps);
+  $('cfgSteps').addEventListener('input', (e) => {
+    APP.config.steps = parseInt(e.target.value, 10);
+    $('cfgStepsLabel').textContent = String(APP.config.steps);
+  });
+  syncModeRows();
+
   $('cfgBookView').checked = APP.config.bookView;
   $('cfgBookView').addEventListener('change', (e) => { APP.config.bookView = e.target.checked; });
 

@@ -43,6 +43,13 @@
             </div>
           </div>
 
+          <div class="cfg-row cfg-radiogroup">
+            <span class="cfg-label">Tick size:</span>
+            <label><input type="radio" name="simTick" value="0.01" class="cfg-input"> 0.01</label>
+            <label><input type="radio" name="simTick" value="0.05" class="cfg-input"> 0.05</label>
+            <label><input type="radio" name="simTick" value="0.1" class="cfg-input"> 0.10</label>
+          </div>
+
           <div class="cfg-row cfg-toggles">
             <label class="cfg-toggle"><input type="checkbox" id="cfgBookView" class="cfg-input"> Order book view (top 2 levels)</label>
           </div>
@@ -51,7 +58,13 @@
         <div class="cfg-section">
           <h3>Difficulty</h3>
 
-          <div class="cfg-row">
+          <div class="cfg-row cfg-radiogroup">
+            <span class="cfg-label">Trading:</span>
+            <label><input type="radio" name="simMode" value="timed" class="cfg-input"> Timed</label>
+            <label><input type="radio" name="simMode" value="steps" class="cfg-input"> Step by step</label>
+          </div>
+
+          <div class="cfg-row" id="cfgPaceRow">
             <label class="slider-label">Trade pace <b id="cfgTradePaceLabel"></b></label>
             <div class="slider-row">
               <span class="slider-end">0.5</span>
@@ -85,12 +98,21 @@
           </div>
         </div>
 
-        <div class="cfg-row">
+        <div class="cfg-row" id="cfgLengthRow">
           <label class="slider-label">Session length <b id="cfgSimLengthLabel"></b></label>
           <div class="slider-row">
             <span class="slider-end">5m</span>
             <input type="range" id="cfgSimLength" class="cfg-input" min="5" max="20" step="1">
             <span class="slider-end">20m</span>
+          </div>
+        </div>
+
+        <div class="cfg-row hidden" id="cfgStepsRow">
+          <label class="slider-label">Number of steps <b id="cfgStepsLabel"></b></label>
+          <div class="slider-row">
+            <span class="slider-end">10</span>
+            <input type="range" id="cfgSteps" class="cfg-input" min="10" max="100" step="1">
+            <span class="slider-end">100</span>
           </div>
         </div>
 
@@ -148,6 +170,7 @@
       <div class="summary-mid">
         <span id="sessionClock">0:00</span>
         <div class="clockbarwrap"><div id="clockBar" class="clockbar"></div></div>
+        <button id="nextStepBtn" class="hidden">Next step ▶</button>
       </div>
       <div class="summary-actions">
         <span id="statusBanner"></span>
@@ -209,6 +232,7 @@
 
     <div id="drillBoard"></div>
     <div id="drillFooter"></div>
+
   </section>
 
   <!-- ============================== DRILL RESULTS SCREEN ============================== -->
@@ -240,6 +264,10 @@
   <div id="toasts"></div>
   <div id="ticket" class="hidden"></div>
 
+  <!-- Explain Last Answer: outside the (scaled) drill screen so it stays full size -->
+  <button id="explainBtn" class="hidden" data-drill="explain" title="Pause the timer and see why the last question's best trade was the best">Explain Last Answer</button>
+  <div id="drillExplain" class="hidden"></div>
+
 </div>
 
 <script src="js/blackscholes.js"></script>
@@ -250,6 +278,8 @@
 <script src="js/simulation.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/drills.js"></script>
+<script src="js/drillexplain.js"></script>
+<script src="js/review.js"></script>
 <script src="js/main.js"></script>
 </body>
 </html>

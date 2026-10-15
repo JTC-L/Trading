@@ -5,7 +5,15 @@
 // be scaled by 100, and any stock leg synthesized out of a combo trade (B/W, P+S) must convert
 // the combo's contract count into shares by the same factor.
 
-function addTrade(kind, idx, side, qty, price) {
+// Every trade of the user's goes through here. `source` ('take' | 'fill' | 'reward' | 'idb' | 'delta1') and
+// `meta` are only for the end-of-session review.
+function addTrade(kind, idx, side, qty, price, source, meta) {
+  const gBefore = currentGreeksTotal();
+  addTradeLegs(kind, idx, side, qty, price);
+  if (typeof reviewTrade === 'function') reviewTrade(kind, idx, side, qty, price, source || 'take', meta, gBefore, currentGreeksTotal());
+}
+
+function addTradeLegs(kind, idx, side, qty, price) {
   // side: 'buy' | 'sell' from the user's perspective. qty > 0.
   const s = qty * (side === 'buy' ? 1 : -1);
   const strikes = APP.market.strikes;
@@ -87,12 +95,19 @@ function addTrade(kind, idx, side, qty, price) {
       break;
     }
     case 'riskReversal': {
-      // buy = long call at the upper strike, short put at the lower strike
+      // Quoted as |call(upper) - put(lower)|, always a debit you pay to buy. Calls over (the call is
+      // richer): buy = long the call at the upper strike, short the put at the lower. Puts over (the
+      // put is richer): buy = long the put at the lower strike, short the call at the upper.
       const [i, j] = decodePair(idx);
       const kLo = strikes[i], kHi = strikes[j];
-      const fp = fairPut(kLo);
-      legs.push({ type: 'call', strike: kHi, qty: s, entryPrice: price + fp });
-      legs.push({ type: 'put', strike: kLo, qty: -s, entryPrice: fp });
+      const fc = fairCall(kHi), fp = fairPut(kLo);
+      if (fc >= fp) {
+        legs.push({ type: 'call', strike: kHi, qty: s, entryPrice: price + fp });
+        legs.push({ type: 'put', strike: kLo, qty: -s, entryPrice: fp });
+      } else {
+        legs.push({ type: 'put', strike: kLo, qty: s, entryPrice: price + fc });
+        legs.push({ type: 'call', strike: kHi, qty: -s, entryPrice: fc });
+      }
       break;
     }
     case 'callSpreadWide': {
@@ -160,7 +175,7 @@ function bsPnlAt(ST) {
 
 function currentGreeksTotal() {
   const S = currentSpot(), T = APP.market.T, r = mktR(), q = mktQ(), vol = currentVol();
-  const tot = { delta: 0, gamma: 0, vega: 0, theta: 0, rho: 0 };
+  const tot = { delta: 0, gamma: 0, vega: 0, theta: 0 };
   APP.position.legs.forEach(l => {
     if (l.type === 'stock') {
       tot.delta += l.qty;
@@ -171,7 +186,6 @@ function currentGreeksTotal() {
       tot.gamma += mult * g.gamma;
       tot.vega += mult * g.vega;
       tot.theta += mult * g.theta;
-      tot.rho += mult * g.rho;
     }
   });
   return tot;

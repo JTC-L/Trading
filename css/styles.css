@@ -102,13 +102,19 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
        spread book     50%W (100%W if IDB is off)
        idb             50%W (100%W if spread book is off)
 ================================================================================ */
-#sessionScreen { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+/* Below the reference size (see fitSession in ui.js) the screen is laid out at that size and scaled down
+   with --s, so nothing is ever cut off on a small or zoomed window. */
+#sessionScreen {
+  flex: none; display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  width: calc((100vw - 20px) / var(--s, 1)); height: calc((100vh - 20px) / var(--s, 1));
+  transform: scale(var(--s, 1)); transform-origin: 0 0;
+}
 
 /* config summary on the left, the timer in the middle (as in the drills), buttons on the right; the
    side padding keeps everything clear of the fullscreen toggle */
 #summaryBar {
-  flex: 0 0 5%; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px;
-  padding: 6px 130px 6px 12px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
+  flex: 0 0 max(5%, 46px); min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px;
+  padding: 6px calc(130px / var(--s, 1)) 6px 12px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
   font-size: 0.8em; overflow: hidden;
 }
 #summaryText { color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -118,26 +124,28 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 #sessionClock { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.35em; }
 .clockbarwrap { width: 80px; height: 6px; background: #eee; border-radius: 3px; overflow: hidden; }
 .clockbar { height: 100%; background: #1554d6; width: 0%; transition: width 0.4s linear; }
+#nextStepBtn { border: none; background: #1554d6; color: #fff; padding: 5px 14px; border-radius: 6px; font-weight: 700; font-size: 0.95em; cursor: pointer; white-space: nowrap; }
+#nextStepBtn:disabled { background: #888; }
 #restartBtn, #resetConfigBtn { border: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.95em; }
 #restartBtn { background: #1554d6; color: #fff; }
 #resetConfigBtn { background: #888; color: #fff; }
 
 #mainGrid {
-  flex: 0 0 80%; min-height: 0;
+  flex: 0 1 80%; min-height: 0;
   display: flex; flex-direction: row; gap: 8px;
 }
 #sessionScreen.no-bottom-row #mainGrid { flex: 0 0 95%; }
 
-#boardArea { flex: 0 0 80%; width: 80%; min-width: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; min-height: 0; display: flex; flex-direction: column; }
+#boardArea { flex: 1 1 0; width: auto; min-width: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; min-height: 0; display: flex; flex-direction: column; }
 #sidePanel { flex: 0 0 20%; width: 20%; min-width: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-#flowSection { flex: 0 0 50%; min-height: 0; background: #fff; border: 2px solid #ddd; border-radius: 8px; padding: 8px 10px; overflow-y: auto; }
+#flowSection { flex: 1 1 0; min-height: 0; background: #fff; border: 2px solid #ddd; border-radius: 8px; padding: 8px 10px; overflow-y: auto; }
 #sidePanel.no-position #flowSection { flex: 0 0 100%; }
-#positionPanel { flex: 0 0 50%; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; overflow: hidden; }
+#positionPanel { flex: 1 1 0; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; overflow: hidden; }
 
-#bottomRow { flex: 0 0 15%; min-height: 0; display: flex; flex-direction: row; gap: 8px; }
+#bottomRow { flex: 0 1 max(15%, 138px); min-height: 0; display: flex; flex-direction: row; gap: 8px; }
 #sessionScreen.no-bottom-row #bottomRow { display: none; }
-#spreadBookSection { flex: 0 0 50%; width: 50%; min-width: 0; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; overflow: auto; }
-#idbSection { flex: 0 0 50%; width: 50%; min-width: 0; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; overflow: auto; }
+#spreadBookSection { flex: 1 1 0; width: auto; min-width: 0; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; overflow: auto; }
+#idbSection { flex: 1 1 0; width: auto; min-width: 0; min-height: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px; overflow: auto; }
 #bottomRow.spread-book-only #spreadBookSection { flex: 0 0 100%; width: 100%; }
 #bottomRow.idb-only #idbSection { flex: 0 0 100%; width: 100%; }
 
@@ -166,7 +174,7 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 }
 .spreadcell { background: #f6f1ff; border-color: #ddd0f5; align-self: center; height: auto; padding: 3px 2px; }
 .strikecell { display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 700; font-size: 1em; }
-.calldelta { font-size: 0.58em; color: #888; font-weight: 400; margin-top: 1px; }
+.calldelta, .strikevega { font-size: 0.58em; color: #888; font-weight: 400; margin-top: 1px; white-space: nowrap; }
 
 /* Anything without a full order book shows just its top prices:  (x100) 10.50 - 10.60 (x150)  */
 .topline { font-size: min(calc(100cqw / 14.5), 15px); white-space: nowrap; line-height: 1.5; }
@@ -182,8 +190,12 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
   background: #fde3e3; color: #900; border: 1px solid #e3a3a3; border-radius: 3px;
 }
 
+/* quote boxes under a top-prices-only market (verticals, spread book): type a price, press Enter, pick a size */
+.qrow { display: flex; gap: 3px; justify-content: center; margin-top: 3px; }
+.qrow .px-in { width: 46%; font-size: min(calc(100cqw / 22), 12px); padding: 1px 2px; }
 .rfqbox { display: flex; flex-direction: column; gap: 2px; align-items: center; }
 .rfq-vol { font-size: 0.62em; color: #555; font-weight: 700; }
+.rfq-max { font-weight: 400; color: #888; font-size: 0.85em; }
 .rfq-row { display: flex; align-items: center; gap: 2px; width: 100%; justify-content: center; }
 .rfq-row input { width: 44%; font-size: 0.66em; padding: 1px; }
 .rfq-row .dash { font-size: 0.65em; color: #888; }
@@ -216,6 +228,8 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 .flow-yellow { background: #fff6d0; border-color: #d6a900; color: #6b5300; }
 .flow-blue { background: #dbeafe; border-color: #2563eb; color: #1e3a8a; }
 .flow-green { background: #dcfce7; border-color: #16a34a; color: #14532d; }
+.flow-gray { background: #f1f2f5; border-color: #9aa0ad; color: #3b4150; }
+.flow-mine .flow-time { opacity: 1; color: #1554d6; }
 
 /* Something just happened: the flow panel and the market involved get a 3s coloured border
    (held steady, then fading back). */
@@ -249,16 +263,21 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 .greeksrow span { color: #888; font-size: 0.7em; }
 
 /* ============================== DRILL SCREEN ============================== */
-#drillScreen { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+/* like the session screen, laid out at the reference size and scaled down to fit a small window */
+#drillScreen {
+  flex: none; min-height: 0; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+  width: calc((100vw - 20px) / var(--s, 1)); height: calc((100vh - 20px) / var(--s, 1));
+  transform: scale(var(--s, 1)); transform-origin: 0 0;
+}
 /* top banner: score on the left, timer in the middle (side padding keeps clear of the fullscreen toggle) */
-#drillTop { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-size: 1.1em; padding: 8px 130px 8px 16px; background: #fff; border: 1px solid #ddd; border-radius: 8px; flex: 0 0 auto; }
+#drillTop { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-size: 1.1em; padding: 8px calc(130px / var(--s, 1)) 8px 16px; background: #fff; border: 1px solid #ddd; border-radius: 8px; flex: 0 0 auto; }
 /* the question type, centred under the banner */
 #drillTypeBox { align-self: center; border: 2px solid #222; border-radius: 8px; background: #fff; padding: 4px 26px; font-weight: 800; font-size: 1.35em; flex: 0 0 auto; }
 #drillScore b { color: #1554d6; }
 #drillTimer { font-weight: 700; font-variant-numeric: tabular-nums; }
 
 #drillBoard {
-  flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
+  flex: 1 0 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
   background: #fff; border-radius: 10px; border: 1px solid #ddd; padding: 20px;
 }
 #drillGrid {
@@ -372,7 +391,7 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
    divider (worst on top), bids on the left (best on top). Every level is its own outlined cell with
    a bar growing out from the divider in proportion to its size. Everything scales with the
    window width so four books always fit in a row. */
-.sheetwrap { display: flex; flex-direction: column; align-items: center; gap: 1.6em; width: 100%; font-size: clamp(9px, 0.9vw, 16px); }
+.sheetwrap { display: flex; flex-direction: column; align-items: center; gap: 1.6em; width: 100%; font-size: clamp(9px, calc(0.9vw / var(--s, 1)), 16px); } /* 0.9% of the (scaled) screen's width */
 .instr-row { display: flex; justify-content: center; gap: 1.8em; }
 .rcchip { align-self: flex-end; border: 1px solid #333; border-radius: 6px; padding: 0.25em 0.9em; background: #fafafa; font-size: 1.1em; }
 /* every instrument is the same width, whether shown, being quoted, or hidden */
@@ -418,3 +437,57 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 .fb-good { color: #1a8a3c; font-weight: 600; }
 .fb-bad { color: #c0392b; font-weight: 600; }
 
+
+/* ---- Explain Last Answer ---- */
+#explainBtn { position: fixed; right: 0; top: 42%; z-index: 150; background: #1554d6; color: #fff; border: none; border-radius: 10px 0 0 10px;
+  padding: 12px 12px; font-weight: 700; font-size: 0.85em; cursor: pointer; writing-mode: vertical-rl; transform: rotate(180deg); letter-spacing: 0.03em; box-shadow: -2px 2px 8px rgba(0,0,0,0.2); }
+#explainBtn:hover { background: #0f43b0; }
+#drillExplain { position: fixed; inset: 0; z-index: 300; background: rgba(15, 20, 35, 0.62); display: flex; align-items: center; justify-content: center; padding: 2vh 2vw; }
+#drillExplain .ex-card { background: #fff; border-radius: 12px; width: min(96vw, 1500px); max-height: 96vh; overflow-y: auto; padding: 14px 22px 18px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); }
+#drillExplain .ex-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#drillExplain .ex-head h2 { margin: 0; font-size: 1.15em; }
+#drillExplain .ex-paused { font-size: 0.8em; color: #888; }
+#drillExplain .ex-close { border: none; background: #1554d6; color: #fff; border-radius: 8px; padding: 8px 18px; font-weight: 700; cursor: pointer; }
+#drillExplain .sheetwrap { font-size: clamp(7px, min(0.82vw, 1.6vh), 15px); margin: 8px 0; }
+#drillExplain .ex-alert { align-self: center; margin: 6px auto 0; width: fit-content; background: #dbeafe; border: 2px solid #2563eb; color: #1e3a8a; font-weight: 700; padding: 5px 16px; border-radius: 6px; }
+#drillExplain .ex-why { font-size: 0.95em; line-height: 1.5; margin-top: 6px; }
+#drillExplain .ex-why p { margin: 6px 0; }
+#drillExplain .ex-why .eq { font-family: Consolas, monospace; background: #f3f5fa; border-radius: 5px; padding: 2px 6px; white-space: nowrap; }
+#drillExplain .ex-why .good { color: #1a8a3c; font-weight: 700; }
+#drillExplain .ex-why .bad { color: #c0392b; font-weight: 700; }
+#drillExplain .ex-you { color: #555; font-size: 0.9em; }
+.ladder td.half.hl-buy { box-shadow: inset 0 0 0 3px #d63333; background-color: #fff0f0; }
+.ladder td.half.hl-sell { box-shadow: inset 0 0 0 3px #1fa855; background-color: #f0fff5; }
+.hlbadge { font-size: 0.78em; font-weight: 800; padding: 0.1em 0.45em; border: 3px solid; background: #fff; }
+.hlbadge.sell { border-color: #1fa855; color: #137a35; }
+.hlbadge.buy { border-color: #d63333; color: #b21e1e; }
+.ansnote { font-size: 0.7em; color: #666; text-align: center; }
+
+/* ---- end-of-session review ---- */
+#simResultsScreen .results-card { width: min(92vw, 860px); max-height: 94vh; overflow-y: auto; padding: 26px 34px; text-align: left; }
+#simResultsScreen .results-card h2 { text-align: center; }
+#simResultsScreen #simFinalStats { font-size: 1rem; font-weight: 400; color: #222; margin-bottom: 16px; }
+.rv-score { text-align: center; }
+.rv-big { font-size: 3.4em; font-weight: 800; color: #1554d6; line-height: 1; }
+.rv-of { font-size: 1.4em; font-weight: 700; color: #888; }
+.rv-sub { text-align: center; color: #666; font-size: 0.9em; margin: 4px 0 12px; }
+.rv-main { background: #eef3ff; border: 1px solid #c6d6fb; border-radius: 8px; padding: 9px 13px; font-size: 0.92em; line-height: 1.45; margin-bottom: 12px; }
+.rv-row { display: grid; grid-template-columns: 1fr 120px 62px; align-items: center; gap: 12px; padding: 6px 0; border-bottom: 1px solid #eee; }
+.rv-label { font-weight: 700; font-size: 0.92em; }
+.rv-label small { display: block; font-weight: 400; color: #666; font-size: 0.82em; line-height: 1.35; margin-top: 1px; }
+.rv-bar { height: 9px; background: #e8eaf0; border-radius: 5px; overflow: hidden; }
+.rv-bar div { height: 100%; background: #1554d6; }
+.rv-pts { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85em; color: #444; }
+.rv-moment { border-radius: 8px; padding: 9px 13px; margin-top: 12px; font-size: 0.92em; line-height: 1.5; }
+.rv-moment p { margin: 4px 0 0; }
+.rv-moment.good { background: #e9f8ee; border: 1px solid #a8dfb9; }
+.rv-moment.bad { background: #fdeeee; border: 1px solid #efb3b3; }
+.rv-note { margin-top: 12px; color: #888; font-size: 0.78em; }
+
+/* the spread book's cells are short: lay each one out in two rows so the quote boxes fit under the prices */
+.spreadbook-item .cell { flex-direction: row; flex-wrap: wrap; align-content: center; justify-content: center; align-items: center; gap: 2px 8px; }
+.spreadbook-item .cell .topline { flex: 1 1 100%; }
+.spreadbook-item .cell .takebtns, .spreadbook-item .cell .qrow { margin-top: 0; }
+.spreadbook-item .cell .qrow { flex: 0 1 52%; }
+.spreadbook-item .cell .pullbtn { width: auto; margin-top: 0; padding: 1px 10px; }
+.spreadbook-item .cell .rfqbox { flex: 1 1 100%; }

@@ -114,9 +114,15 @@ function fairStrangle(idx) {
   const [i, j] = decodePair(idx), s = APP.market.strikes;
   return fairPut(s[i]) + fairCall(s[j]); // put at the lower strike, call at the upper
 }
+// A risk reversal is always quoted as a positive price, |call(upper) - put(lower)|: "calls over" when the
+// call is richer (long the call, short the put), "puts over" when the put is (long the put, short the call).
+function riskReversalCallsOver(idx) {
+  const [i, j] = decodePair(idx), s = APP.market.strikes;
+  return fairCall(s[j]) >= fairPut(s[i]);
+}
 function fairRiskReversal(idx) {
   const [i, j] = decodePair(idx), s = APP.market.strikes;
-  return fairCall(s[j]) - fairPut(s[i]); // long call at the upper strike, short put at the lower
+  return Math.abs(fairCall(s[j]) - fairPut(s[i]));
 }
 function fairCallSpreadWide(idx) {
   const [i, j] = decodePair(idx), s = APP.market.strikes;
@@ -158,50 +164,140 @@ function fairMid(kind, idx) {
   return 0;
 }
 
-// Total bid-ask width ranges [lo, hi] by liquidity regime. Markets are tight (capped at 0.20)
-// unless the size being quoted is 100 or more, in which case the old, wider regime-based range
-// applies (a bigger clip naturally trades wider).
-function widthRange(kind, size) {
+// ---- vega, tick and width rules -------------------------------------------------------
+
+// Vertical spreads (and their wide cousins) trade very tight: at most 0.05 wide, or 0.10 on a 0.10 tick.
+function isVerticalKind(kind) { return kind === 'callSpread' || kind === 'putSpread' || kind === 'callSpreadWide' || kind === 'putSpreadWide'; }
+function verticalMaxWidth() { return tickSize() >= 0.1 - 1e-9 ? 0.1 : 0.05; }
+
+// Black-Scholes vega of one unit of the instrument (per share, per vol point) — a spread's is the
+// difference of its legs' vegas, so wings and verticals are naturally low-vega.
+function unitVega(kind, idx) {
+  if (kind === 'stock') return 0;
+  const S = currentSpot(), T = APP.market.T, r = mktR(), q = mktQ(), vol = currentVol(), s = APP.market.strikes;
+  const v = (i) => BS.greeks(S, s[i], T, r, q, vol, 'call').vega; // a put at the same strike has the same vega
+  switch (kind) {
+    case 'call': case 'put': case 'ps': case 'bw': return v(idx);
+    case 'straddle': return 2 * v(idx);
+    case 'combo': return 0;
+    case 'callSpread': case 'putSpread': return Math.abs(v(idx) - v(idx + 1));
+    case 'strangle': { const [i, j] = decodePair(idx); return v(i) + v(j); }
+    case 'riskReversal': case 'callSpreadWide': case 'putSpreadWide': { const [i, j] = decodePair(idx); return Math.abs(v(j) - v(i)); }
+    case 'butterfly': { const [i, j, k] = decodeTriple(idx); return Math.abs(v(i) - 2 * v(j) + v(k)); }
+    case 'condor': { const [i, j, k, l] = decodeQuad(idx); return Math.abs(v(i) - v(j) - v(k) + v(l)); }
+  }
+  return 0;
+}
+
+// The position tracker's vega units: a quantity is in contracts of 100 shares.
+function vegaOfSize(kind, idx, qty) { return unitVega(kind, idx) * 100 * qty; }
+
+// How wide a market is, by instrument and size: proportional to the instrument's vega times the square
+// root of the volume. An instrument with twice the vega quotes twice as wide, and four times the lots
+// quote twice as wide — 100 lots 1 point wide on a vega-one instrument means 400 lots 2 wide, or 100 lots
+// 0.5 wide on a vega-0.5 instrument. (Vega is per share per vol point, so an at-the-money call here is
+// about 0.12: roughly 0.12 wide at 100 lots, 0.25 at 400.) The delta-1 isn't priced this way.
+function typicalWidth(kind, idx, qty) {
+  return unitVega(kind, idx || 0) * Math.sqrt(Math.max(qty, 1) / 100);
+}
+
+// What a market maker may quote: no more than 1 wide on any instrument, or 2 wide when the size asked for
+// is more than 200 options or 100 straddles (a straddle is two options, so half the lots). Verticals stay
+// within their own, much tighter cap whatever the size. A wider market than is typical just gets fewer
+// trades (see widthTradeFactor in simulation.js).
+function isStraddleLike(kind) { return kind === 'straddle' || kind === 'strangle' || kind === 'riskReversal' || kind === 'combo'; }
+function maxUserWidth(kind, idx, qty) {
+  if (isVerticalKind(kind)) return verticalMaxWidth();
+  return qty > (isStraddleLike(kind) ? 100 : 200) ? 2 : 1;
+}
+
+// A smaller tick means a tighter market everywhere; a bigger one, a looser one.
+function tickWidthScale() { const t = tickSize(); return t >= 0.1 - 1e-9 ? 1.4 : (t <= 0.01 + 1e-9 ? 0.5 : 1); }
+
+// Total bid-ask width range [lo, hi] for a market in `size` lots. The delta-1 keeps its liquidity-regime
+// widths; everything else follows typicalWidth, a little wider when the delta-1 is fixed (less is known
+// about the options) and tighter when vol is fixed. Verticals are capped outright.
+function widthRange(kind, size, idx) {
   const mode = APP.config.certaintyMode;
-  const isOption = (kind === 'call' || kind === 'put' || kind === 'ps' || kind === 'bw');
-  const isSpread = (kind === 'callSpread' || kind === 'putSpread' || kind === 'callSpreadWide' || kind === 'putSpreadWide'
-    || kind === 'butterfly' || kind === 'condor');
-  const isCombo = (kind === 'straddle' || kind === 'combo' || kind === 'strangle' || kind === 'riskReversal');
+  const scale = tickWidthScale(), t = tickSize();
   let lo, hi;
   if (kind === 'stock') {
     if (mode === 'stock') [lo, hi] = [0.02, 0.04];
     else if (mode === 'vol') [lo, hi] = [0.15, 0.30];
     else [lo, hi] = [0.08, 0.15];
-  } else if (isOption) {
-    if (mode === 'stock') [lo, hi] = [0.30, 0.50];
-    else if (mode === 'vol') [lo, hi] = [0.10, 0.20];
-    else [lo, hi] = [0.15, 0.30];
-  } else if (isSpread) {
-    [lo, hi] = [0.10, 0.22];
-  } else if (isCombo) {
-    [lo, hi] = [0.15, 0.30];
+    lo *= scale; hi *= scale;
   } else {
-    [lo, hi] = [0.10, 0.20];
+    const regime = mode === 'stock' ? 1.7 : (mode === 'vol' ? 0.65 : 1);
+    const typ = typicalWidth(kind, idx, size || 25) * regime * scale;
+    lo = 0.75 * typ; hi = 1.3 * typ;
   }
-  if ((size || 0) < 100) {
-    hi = Math.min(hi, 0.20);
-    lo = Math.min(lo, hi);
-  }
+  lo = Math.max(lo, t); hi = Math.max(hi, lo);
+  if (isVerticalKind(kind)) { hi = Math.min(hi, verticalMaxWidth()); lo = Math.min(lo, hi); }
   return [lo, hi];
 }
 
-// P+S and B/W are the only instruments allowed to price negative (they're strike-relative
-// combo debits/credits, not raw option premiums) — everything else keeps the usual nickel floor.
-function priceFloorFor(kind) { return (kind === 'ps' || kind === 'bw') ? -Infinity : 0.05; }
+// P+S and B/W are the only instruments allowed to price negative (they're strike-relative combo
+// debits/credits, not raw option premiums). Everything else keeps a one-tick floor, and an option is
+// never bid for less than its intrinsic value (the parity bound: C >= S - K + rc, P >= K - S - rc).
+function intrinsicFor(kind, idx) {
+  if (kind !== 'call' && kind !== 'put' && kind !== 'straddle') return 0;
+  const d = currentSpot() - APP.market.strikes[idx] + APP.market.rc; // C - P
+  return kind === 'call' ? Math.max(0, d) : kind === 'put' ? Math.max(0, -d) : Math.abs(d);
+}
+// Signed structures: P+S and B/W are strike-relative, so they can be worth less than nothing. (A risk
+// reversal can't: it's quoted as |call - put|.)
+function isSignedKind(kind) { return kind === 'ps' || kind === 'bw'; }
+function priceFloorFor(kind, idx) {
+  if (isSignedKind(kind)) return -Infinity;
+  return Math.max(tickSize(), idx == null ? 0 : APP.util.ct(intrinsicFor(kind, idx)));
+}
 
 function makeIndicativeQuote(kind, idx) {
   const mid = fairMid(kind, idx);
-  const [lo, hi] = widthRange(kind, 0); // indicative marks carry no size — always tight
+  const [lo, hi] = widthRange(kind, 0, idx); // indicative marks carry no size: a modest 25-lot width
   const w = APP.util.rand(lo, hi) / 2;
-  const floor = priceFloorFor(kind);
-  let bid = APP.util.round5c(Math.max(floor, mid - w));
-  let ask = APP.util.round5c(Math.max(bid + 0.05, mid + w));
+  const floor = priceFloorFor(kind, idx);
+  let bid = APP.util.rt(Math.max(floor, mid - w));
+  let ask = APP.util.rt(Math.max(bid + tickSize(), mid + w));
   return { bid, ask };
+}
+
+// ---- time travel and focus -----------------------------------------------------------
+
+// The fair value `dtSec` from now on the session's own clock (informed customers trade on this).
+function fairMidAt(kind, idx, dtSec) {
+  const saved = APP.session.elapsedSec;
+  APP.session.elapsedSec = Math.min(APP.market.lenSec, saved + dtSec);
+  const v = fairMid(kind, idx);
+  APP.session.elapsedSec = saved;
+  return v;
+}
+
+// A session's length on the clock the fair-value paths run on. Timed sessions run in real time; a
+// step-by-step session has no clock, so it gets a virtual one with room for the moves to play out.
+function sessionLenSec() {
+  return APP.config.mode === 'steps' ? Math.max(300, APP.config.steps * 15) : APP.config.simLengthMin * 60;
+}
+
+// Strike indices of the instruments a structure is built on.
+function strikesOf(kind, idx) {
+  switch (kind) {
+    case 'stock': return [];
+    case 'callSpread': case 'putSpread': return [idx, idx + 1];
+    case 'strangle': case 'riskReversal': case 'callSpreadWide': case 'putSpreadWide': return decodePair(idx);
+    case 'butterfly': return decodeTriple(idx);
+    case 'condor': return decodeQuad(idx);
+  }
+  return [idx];
+}
+function isFocusKind(kind, idx) {
+  const st = strikesOf(kind, idx);
+  return kind === 'stock' || st.every(i => APP.market.focus.includes(i));
+}
+// How often the instruments under a structure have traded (calls and puts at its strikes, and itself).
+function popularity(kind, idx) {
+  const c = APP.market.counts, own = c[`${kind}_${idx}`] || 0;
+  return own + strikesOf(kind, idx).reduce((s, i) => s + (c[`call_${i}`] || 0) + (c[`put_${i}`] || 0) + (c[`straddle_${i}`] || 0), 0);
 }
 
 // --- session bootstrap -----------------------------------------------------
@@ -271,7 +367,9 @@ function isBookKind(kind) {
 
 function initMarket() {
   APP.market.delta1 = APP.config.delta1;
-  const spot0 = APP.util.round5c(APP.util.rand(70, 130));
+  APP.market.tick = [0.01, 0.05, 0.1].includes(APP.config.tick) ? APP.config.tick : 0.05;
+  APP.market.counts = {};
+  const spot0 = APP.util.rt(APP.util.rand(70, 130));
   const vol0 = APP.util.rand(18, 30);
   const incr = getStrikeIncrement(spot0);
   const N = APP.util.clamp(APP.config.numStrikes, 1, 5);
@@ -289,12 +387,20 @@ function initMarket() {
   APP.market.incr = incr;
   APP.market.strikes = strikes;
   APP.market.T = APP.CONST.DTE_DAYS / 365;
-  APP.market.rc = isFutureMode() ? 0 : APP.util.round5c(spot0 * (Math.exp((APP.CONST.R - APP.CONST.Q) * APP.market.T) - 1));
+  APP.market.rc = isFutureMode() ? 0 : APP.util.rt(spot0 * (Math.exp((APP.CONST.R - APP.CONST.Q) * APP.market.T) - 1));
   APP.instruments.rc.value = APP.market.rc;
   APP.market._fixedStockQuote = null; // re-rolled once, then held for the whole session if the delta-1 is fixed
 
-  const simLenSec = APP.config.simLengthMin * 60;
-  const maxTurns = Math.max(1, Math.floor(APP.config.simLengthMin / 3));
+  // the flow concentrates on three strikes: the at-the-money one and the ones either side of it
+  let atm = 0;
+  strikes.forEach((K, i) => { if (Math.abs(K - spot0) < Math.abs(strikes[atm] - spot0)) atm = i; });
+  APP.market.focus = [atm - 1, atm, atm + 1].filter(i => i >= 0 && i < strikes.length);
+  // ... and on a couple of the instruments (e.g. the calls and the straddles), not all of them
+  APP.market.hotKinds = mainOptionKinds().slice().sort(() => Math.random() - 0.5).slice(0, 2);
+
+  const simLenSec = sessionLenSec();
+  APP.market.lenSec = simLenSec;
+  const maxTurns = Math.max(1, Math.floor(simLenSec / 180));
   let stockTurns, volTurns;
   if (APP.config.certaintyMode === 'stock') {
     stockTurns = 0;

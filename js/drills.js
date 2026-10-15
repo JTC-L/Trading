@@ -195,11 +195,11 @@ function singleBoardHtml() {
 
 function handleDrillAnswerInput(e) {
   const q = APP.drill.question;
-  if (!q || q.type !== 'single') return;
+  if (!q || q.type !== 'single' || APP.drill.paused) return;
   const val = parseFloat(e.target.value);
   if (isNaN(val)) return;
   if (Math.abs(val - q.answer) < 0.005) {
-    addDrillScore(1);
+    addDrillScore(1, { value: val });
     nextDrillQuestion();
   }
 }
@@ -258,6 +258,39 @@ function booksToQuotes(books, skip) {
   return quotes;
 }
 
+// ---- what a market can look like -------------------------------------------------------
+// Every market has bid < ask (and each deeper level is strictly worse), and nothing is ever bid for
+// less than its intrinsic value: an option is worth at least that, so you'd always pay it. With
+// D = call - put (= X - K + rc), parity gives call >= D, put >= -D and straddle >= |D|, so those are
+// the floors (P+S and B/W are the call and the put shifted by r/c). Nothing is bid for nothing at all.
+function drillFloors(base) {
+  const D = base.D, rc = base.rc;
+  const f = { stock: -Infinity, call: Math.max(0, D), put: Math.max(0, -D), straddle: Math.abs(D) };
+  if (APP.drill.delta1 === 'stock') { f.ps = Math.max(0, D) - rc; f.bw = Math.max(0, -D) + rc; }
+  Object.keys(f).forEach(k => { if (isFinite(f[k])) f[k] = r2(f[k]); });
+  return f;
+}
+
+function bookIsSane(b) {
+  if (!b || !b.bids.length || !b.asks.length) return false;
+  if (!(b.bids[0].px < b.asks[0].px - 1e-9)) return false;
+  for (let i = 1; i < b.bids.length; i++) if (!(b.bids[i].px < b.bids[i - 1].px - 1e-9)) return false;
+  for (let i = 1; i < b.asks.length; i++) if (!(b.asks[i].px > b.asks[i - 1].px + 1e-9)) return false;
+  return Math.abs(b.bid - b.bids[0].px) < 1e-9 && Math.abs(b.ask - b.asks[0].px) < 1e-9;
+}
+
+function booksRespectFloors(books, floors) {
+  return Object.keys(books).every(k => {
+    const b = books[k];
+    if (!b) return true;
+    const free = k === 'ps' || k === 'bw' || k === 'stock'; // strike-relative / the underlying: no "above nothing" rule
+    const lo = Math.max(floors[k] == null ? -Infinity : floors[k], free ? -Infinity : 0.0001);
+    return b.bids.every(l => l.px >= lo - 1e-9);
+  });
+}
+
+function booksAreValid(books, floors) { return Object.keys(books).every(k => bookIsSane(books[k])) && booksRespectFloors(books, floors); }
+
 // Make a Market: show just two instruments from different families (enough to work the answer out).
 function generateMakeQuestion() {
   for (let tries = 0; tries < 200; tries++) {
@@ -266,20 +299,23 @@ function generateMakeQuestion() {
     const target = nextFromBag('make', keys);
     const others = Object.keys(drillFamilies()).filter(f => f !== drillFamilyOf(target));
     const givens = pickTwoFamilyGivens(others);
+    const floors = drillFloors(base);
     const books = {};
     givens.forEach(k => { books[k] = makeBook(base.values[k], k); });
+    if (!booksAreValid(books, floors)) continue;
     const vecs = arbVectors(APP.drill.delta1, base.K, base.rc);
     const best = bestMarketFromOthers(vecs, target, booksToQuotes(books));
     if (best.bid == null || best.ask == null || best.ask - best.bid < 0.05 - 1e-9) continue;
-    // you'd always buy an option for nothing, so an option's best bid is never below 0
-    const isOption = target === 'call' || target === 'put' || target === 'straddle';
+    // you'd always pay at least intrinsic value (and never less than nothing) for an option, so the
+    // best bid is never below that, however low the replication says it could go
     let bestBid = r2(APP.util.floor5c(best.bid));
-    if (isOption && bestBid < 0) bestBid = 0;
+    const floorT = floors[target];
+    if (isFinite(floorT) && bestBid < floorT) bestBid = floorT;
     const bestAsk = r2(APP.util.ceil5c(best.ask));
     if (bestAsk <= bestBid) continue;
     return {
-      type: 'make', K: base.K, rc: base.rc, books, target, givens,
-      best: { bid: bestBid, ask: bestAsk, fair: (best.bid + best.ask) / 2 },
+      type: 'make', K: base.K, rc: base.rc, D: base.D, T: base.T, values: base.values, floor: floorT, books, target, givens,
+      best: { bid: bestBid, ask: bestAsk, fair: (best.bid + best.ask) / 2, rawBid: best.bid, rawAsk: best.ask, bidRep: best.bidRep, askRep: best.askRep },
     };
   }
   return generateMakeQuestion();
@@ -315,11 +351,12 @@ function generateArbQuestion() {
     if (wantArb) {
       shuffled(keys).slice(0, Math.random() < 0.4 ? 2 : 1).forEach(t => shiftBookIntoArb(t, books, vecs));
     }
-    // option/future prices must stay positive (P+S and B/W are strike-relative and may be negative)
-    if (keys.some(k => k !== 'ps' && k !== 'bw' && books[k].bids[DRILL_LEVELS - 1].px <= 0)) continue;
+    // every market sane (bid < ask), nothing bid below intrinsic value or for nothing (P+S and B/W are
+    // strike-relative and may be negative)
+    if (!booksAreValid(books, drillFloors(base))) continue;
     const arbs = findArbs(vecs, booksToQuotes(books));
     if (wantArb ? (arbs.length > 0 && arbs[0].profit <= 0.3 + 1e-9) : arbs.length === 0) {
-      return { type: 'arb', K: base.K, rc: base.rc, books, arbs };
+      return { type: 'arb', K: base.K, rc: base.rc, D: base.D, T: base.T, values: base.values, books, arbs };
     }
   }
   return generateArbQuestion();
@@ -460,53 +497,77 @@ function attemptLiquidity(mode, n, basis, relax, decorKind) {
     }
     legs.forEach(l => shiftLegOffFair(books, base.values, l, mode === 'print' || basis === 'price'));
   }
-  if (keys.some(k => k !== 'ps' && k !== 'bw' && books[k].bids[DRILL_LEVELS - 1].px <= 0)) return null;
+  const floors = drillFloors(base);
+  if (!booksAreValid(books, floors)) return null;
   const correct = positiveEdgeLegs(books, base.values);
   if (correct.length !== legs.length || !legs.every(l => correct.some(c => c.name === l.name && c.side === l.side && c.level === 0))) return null;
 
   // News: "a customer just traded a clip of Z at a price inside Z's market" (inside, or you could simply
-  // replicate their trade). Z is never one of the stray quotes. Two kinds, because the size of the clip is
-  // what tells you how much to believe it:
-  //   big   — massive (5-10x a typical quote): the price is Z's true value, a reliable anchor
-  //   small — about the size of the books themselves: just some price inside Z's market, so it's noise to
-  //           be discounted, and it often points the wrong way
+  // replicate their trade). Z is never one of the stray quotes. Whether to believe it depends on two
+  // things — how big the clip is, and whether the instrument is one a customer with a view would pick:
+  //   big   — massive (5-10x a typical quote) in an instrument that makes sense for delta (the future,
+  //           an in-the-money option) or for vol (an at-the-money option or straddle): informed, so the
+  //           price is Z's true value, a reliable anchor
+  //   noise — massive, but in an out-of-the-money option or off-centre straddle, which nobody takes a
+  //           view with: not informed, so it's just some price inside Z's market and often misleads
+  //   small — about the size of the books themselves: also just some price inside Z's market
   const makePrint = (kind) => {
     const fine = keys.filter(k => !legs.some(l => l.name === k));
-    if (!fine.length) return null;
-    const z = APP.util.choice(fine);
+    const relevant = fine.filter(k => drillRelevance(k, base));
+    const pool = kind === 'big' ? relevant : (kind === 'noise' ? fine.filter(k => !drillRelevance(k, base)) : fine);
+    if (!pool.length) return null;
+    const z = APP.util.choice(pool);
     const fair = base.values[z], b = books[z];
     let px = fair, size;
-    if (kind === 'big') {
+    if (kind === 'big' || kind === 'noise') {
       size = Math.round(typicalSize(z) * APP.util.choice([5, 6, 8, 10]) / 100) * 100;
     } else {
       size = Math.max(10, Math.round(typicalSize(z) * APP.util.rand(0.5, 1.5) / 10) * 10);
+    }
+    if (kind !== 'big') { // not informed: some price inside the market, not necessarily the true value
       const alts = [];
       for (let p = r2(b.bid + 0.05); p < b.ask - 1e-9; p = r2(p + 0.05)) if (Math.abs(p - fair) > 1e-6) alts.push(p);
       if (alts.length) px = APP.util.choice(alts);
     }
+    const dir = Math.random() < 0.5 ? 'bought' : 'sold';
     const what = z === 'stock' ? drillName('stock') : `of the ${sheetHeaderFor(z, base.K)}`;
-    return { pin: { name: z, px }, text: `Customer ${Math.random() < 0.5 ? 'bought' : 'sold'} ${size} ${what} for ${r2c(px)}` };
+    return {
+      pin: { name: z, px }, text: `Customer ${dir} ${size} ${what} for ${r2c(px)}`,
+      news: { name: z, px, size, dir, kind, informed: kind === 'big', why: drillRelevance(z, base) },
+    };
   };
-  let alert = null, pin = null;
-  if (mode === 'print') { // a massive one that's needed to settle the question
+  let alert = null, pin = null, news = null;
+  if (mode === 'print') { // a massive, informed one that's needed to settle the question
     const p = makePrint('big');
     if (!p) return null;
-    pin = p.pin; alert = p.text;
+    pin = p.pin; alert = p.text; news = p.news;
   }
   if (!relax && !takeQuestionIsFair(base, books, keys, correct, pin, basis)) return null;
-  if (!alert && decorKind === 'big') { // massive and consistent with the right answer — it confirms the anchor
+  if (!alert && decorKind === 'big') { // massive, informed and consistent with the right answer — it confirms the anchor
     const p = makePrint('big');
-    if (p) alert = p.text;
-  } else if (!alert && decorKind === 'small') { // small: worth including only if it could really mislead
-    const p = makePrint('small');
+    if (p) { alert = p.text; news = p.news; }
+  } else if (!alert && (decorKind === 'small' || decorKind === 'noise')) { // decoys: worth including only if they could really mislead
+    const p = makePrint(decorKind);
     if (!p) return null;
     const trueStr = correct.map(l => `${l.name}:${l.side}:0`).sort().join('|');
     const pinned = fewestStrays(allStrayReadings(base, books, keys, p.pin));
     const misleads = !(pinned.length === 1 && pinned[0].slice().sort().join('|') === trueStr);
     if (!misleads && Math.random() < 0.7) return null; // mostly retry until we find a real decoy
-    alert = p.text;
+    alert = p.text; news = p.news;
   }
-  return { type: 'take', K: base.K, rc: base.rc, books, correct, alert };
+  return { type: 'take', K: base.K, rc: base.rc, D: base.D, T: base.T, values: base.values, floors, books, correct, alert, news };
+}
+
+// Why a customer would trade this instrument at all: 'delta' (the future, or an in-the-money option —
+// they want direction), 'vol' (an at-the-money option or straddle — they want volatility), or null
+// (an out-of-the-money option, an off-centre straddle: no reason, so size alone proves nothing).
+function drillRelevance(key, base) {
+  if (key === 'stock') return 'delta';
+  const m = Math.abs(base.D) / base.T; // 0 = at the money
+  if (key === 'straddle') return m <= 0.35 ? 'vol' : (m >= 0.7 ? 'delta' : null);
+  if (m <= 0.2) return 'vol';
+  const itm = (key === 'call' || key === 'ps') ? base.D > 0 : base.D < 0;
+  return itm ? 'delta' : null;
 }
 
 function generateLiquidityQuestion(forceMode) {
@@ -518,12 +579,13 @@ function generateLiquidityQuestion(forceMode) {
     : (Math.random() < 0.7 ? 1 : (Math.random() < 0.6 ? 2 : 3));
   const BUDGET = 90; // attempts per stage — each is ~1ms, so the worst case is a fraction of a second
   // About half of all questions carry news, 75% of it massive and 25% small. The "needed" prints
-  // (mode 'print', always massive) already make up ~22% of questions; the rest are added here, kind
-  // decided once so a hard-to-find decoy can't quietly turn into a massive print.
+  // (mode 'print', always massive and informed) already make up ~22% of questions; the rest are added
+  // here, kind decided once so a hard-to-find decoy can't quietly turn into an informed print. Of the
+  // massive ones, about one in five is in an instrument nobody would take a view with ('noise').
   let decorKind = null;
   if (mode === 'none' || mode === 'plain') {
     const r = Math.random();
-    decorKind = r < 0.175 ? 'big' : (r < 0.33 ? 'small' : null);
+    decorKind = r < 0.105 ? 'big' : (r < 0.175 ? 'noise' : (r < 0.33 ? 'small' : null));
   }
   let m = mode, tried = 0;
   for (;;) {
@@ -556,7 +618,12 @@ function sheetKeys() {
 function sheetHeaderFor(key, K) {
   return key === 'stock' ? drillName('stock') : `${K} ${drillName(key)}`;
 }
-function sheetHeader(key) { return sheetHeaderFor(key, APP.drill.question.K); }
+
+// The board is drawn for the live question — or, for "Explain Last Answer", for the last one: read-only,
+// with the best prices marked. DRILL_CTX = { q, hl: {'key:side:level': 'buy'|'sell'}, answer: {bid, ask} }.
+let DRILL_CTX = null;
+function rq() { return DRILL_CTX ? DRILL_CTX.q : APP.drill.question; }
+function sheetHeader(key) { return sheetHeaderFor(key, rq().K); }
 
 // A level's fill grows out from the centre divider in proportion to its size (full at double the
 // typical size): bids to the left in green, offers to the right in red.
@@ -577,19 +644,31 @@ function halfHtml(key, book, side, level, withBtn, input) {
   const lv = side === 'bid' ? book.bids[level] : book.asks[level];
   const cls = side === 'bid' ? 'bid' : 'ask';
   if (input) {
+    if (DRILL_CTX) { // explaining: show the best market (and what was typed) where the answer boxes were
+      const a = DRILL_CTX.answer || {};
+      const best = DRILL_CTX.q.best;
+      const v = side === 'bid' ? best.bid : best.ask, mine = side === 'bid' ? a.bid : a.ask;
+      return `<td class="half ${cls} has target"><div class="hr"><span class="px">${r2c(v)}</span></div><div class="ansnote">${mine != null && !isNaN(mine) ? `you: ${r2c(mine)}` : 'best'}</div></td>`;
+    }
     return `<td class="half ${cls} has target"><input id="${side === 'bid' ? 'mkBid' : 'mkAsk'}" type="number" step="0.05" placeholder="${side === 'bid' ? 'Bid' : 'Ask'}" autocomplete="off"></td>`;
   }
   if (!lv) return `<td class="half ${cls}"></td>`;
   const sz = `<span class="sz">(x${lv.size})</span>`, px = `<span class="px">${r2c(lv.px)}</span>`;
-  const btn = withBtn ? pickBtnHtml(key, side === 'bid' ? 'sell' : 'buy', level) : '';
+  const act = side === 'bid' ? 'sell' : 'buy';
+  let btn = withBtn ? pickBtnHtml(key, act, level) : '';
+  let hl = '';
+  if (DRILL_CTX) {
+    const on = DRILL_CTX.hl[`${key}:${act}:${level}`];
+    if (on) { hl = ` hl hl-${act}`; btn = `<span class="hlbadge ${act}">${act === 'sell' ? 'Yours' : 'Mine'} ✔</span>`; }
+  }
   const inner = side === 'bid' ? sz + px + btn : btn + px + sz;
-  return `<td class="half ${cls} has${level === 0 ? ' best' : ''}" style="${barStyle(key, lv.size, side)}"><div class="hr">${inner}</div></td>`;
+  return `<td class="half ${cls} has${level === 0 ? ' best' : ''}${hl}" style="${barStyle(key, lv.size, side)}"><div class="hr">${inner}</div></td>`;
 }
 
 // The ladder: offers stacked above the divider's right side (worst on top), bids below on the left.
 function ladderHtml(key, target) {
-  const q = APP.drill.question;
-  const withBtn = q.type !== 'make';
+  const q = rq();
+  const withBtn = q.type !== 'make' && !DRILL_CTX;
   const book = target ? { bids: [], asks: [] } : q.books[key];
   let rows = '';
   for (let i = DRILL_LEVELS - 1; i >= 0; i--) {
@@ -602,7 +681,7 @@ function ladderHtml(key, target) {
 }
 
 function instrHtml(key) {
-  const q = APP.drill.question;
+  const q = rq();
   const isTarget = q.type === 'make' && q.target === key;
   const hidden = q.type === 'make' && !isTarget && !q.books[key];
   const body = hidden ? `<div class="hid-box">—</div>` : ladderHtml(key, isTarget);
@@ -611,7 +690,7 @@ function instrHtml(key) {
 }
 
 function bookBoardHtml() {
-  const q = APP.drill.question;
+  const q = rq();
   const keys = sheetKeys();
   const rc = APP.drill.delta1 === 'stock'
     ? `<div class="rcchip"><b>R/C</b> ${APP.util.fmtSigned(q.rc)}</div>` : '';
@@ -661,7 +740,9 @@ function setDrillFeedback(text, good) {
   if (el) el.innerHTML = `<span class="${good ? 'fb-good' : 'fb-bad'}">${text}</span>`;
 }
 
-function addDrillScore(pts) {
+// info is what the player did, kept for Explain Last Answer.
+function addDrillScore(pts, info) {
+  APP.drill.pending = Object.assign({ pts }, info || {});
   APP.drill.score += pts;
   document.getElementById('drillScoreVal').textContent = String(APP.drill.score);
 }
@@ -689,7 +770,7 @@ function submitMakeAnswer() {
     setDrillFeedback(ask - bid > 1 + 1e-9 ? 'That market is too wide — try again.' : "The midpoint isn't inside your market — try again.", false);
     return;
   }
-  addDrillScore(pts);
+  addDrillScore(pts, { bid, ask });
   const correct = `${r2c(q.best.bid)} / ${r2c(q.best.ask)}`;
   nextDrillQuestion();
   setDrillFeedback(pts === 2 ? `+2 — spot on (${correct})` : `+${pts} — the best market was ${correct}`, pts === 2);
@@ -719,7 +800,7 @@ function submitMakeTrades() {
     const pkg = legs.every(l => l.level === 0) ? matchArbLegSet(legs, q.arbs) : null; // an arbitrage lives at the best prices
     if (!pkg) { drillTakeWrong('Not an arbitrage — selections cleared, try again.'); return; }
     const best = pkg.profit >= q.arbs[0].profit - 1e-9;
-    addDrillScore(best ? 2 : 1);
+    addDrillScore(best ? 2 : 1, { legs, pkg });
     nextDrillQuestion();
     setDrillFeedback(best ? `+2 — the best arbitrage (${r2c(pkg.profit)})` : `+1 — an arbitrage, but the best was ${r2c(q.arbs[0].profit)}`, best);
     return;
@@ -740,7 +821,7 @@ function submitMakeTrades() {
     const pkgs = stray.map(pkgOf);
     if (pkgs.every(Boolean)) {
       const msg = `+1 — ${stray.map(describeLeg).join(' and ')} can be hedged for a riskless ${r2c(pkgs[0].profit)} (${pkgs[0].legs.map(describeLeg).join(', ')}), though the best trade was to take: ${q.correct.map(describeLeg).join(' and ') || 'nothing'}`;
-      addDrillScore(1);
+      addDrillScore(1, { legs, hedge: pkgs[0] });
       nextDrillQuestion();
       setDrillFeedback(msg, false);
       return;
@@ -752,7 +833,7 @@ function submitMakeTrades() {
   const msg = missing.length
     ? `+1 — a right leg, but the best trade also had: ${missing.map(describeLeg).join(' and ')}`
     : '+2 — you took all the right legs';
-  addDrillScore(missing.length ? 1 : 2);
+  addDrillScore(missing.length ? 1 : 2, { legs });
   nextDrillQuestion();
   setDrillFeedback(msg, !missing.length);
 }
@@ -762,7 +843,7 @@ function submitNoTrade() {
   const q = APP.drill.question;
   if (!q || q.type !== 'take') return;
   if (q.correct.length) { drillTakeWrong('There was a good trade on the screen — selections cleared.'); return; }
-  addDrillScore(2);
+  addDrillScore(2, { none: true });
   nextDrillQuestion();
   setDrillFeedback('+2 — correct, nothing worth taking', true);
 }
@@ -771,7 +852,7 @@ function submitNoArb() {
   const q = APP.drill.question;
   if (!q || q.type !== 'arb') return;
   if (q.arbs.length) { drillTakeWrong('There was an arbitrage on the screen — selections cleared.'); return; }
-  addDrillScore(2);
+  addDrillScore(2, { none: true });
   nextDrillQuestion();
   setDrillFeedback('+2 — correct, no arbitrage', true);
 }
@@ -789,10 +870,15 @@ APP.drill = {
   delta1: 'future',
   view: 'book',
   types: { arb: true, take: true },
+  pending: null,  // what the player just did (set by addDrillScore) ...
+  last: null,     // ... kept with its question as {q, ans} for Explain Last Answer
+  paused: false,  // true while the explanation is open: the timer is stopped
 };
 
 function nextDrillQuestion() {
   APP.drill.sel = {};
+  if (APP.drill.question && APP.drill.pending) APP.drill.last = { q: APP.drill.question, ans: APP.drill.pending };
+  APP.drill.pending = null;
   if (APP.drill.view === 'single') {
     APP.drill.question = generateSingleQuestion();
   } else {
@@ -804,9 +890,11 @@ function nextDrillQuestion() {
     APP.drill.question = type === 'make' ? generateMakeQuestion() : (type === 'arb' ? generateArbQuestion() : generateLiquidityQuestion());
   }
   renderDrillQuestion(false);
+  updateExplainButton();
 }
 
 function drillTick() {
+  if (APP.drill.paused) return;
   APP.drill.remainingSec -= 1;
   if (APP.drill.remainingSec <= 0) {
     APP.drill.remainingSec = 0;
@@ -831,6 +919,8 @@ function startDrill() {
   APP.drill.totalSec = APP.drillConfig.minutes * 60;
   APP.drill.remainingSec = APP.drill.totalSec;
   APP.drill.bags = {};
+  APP.drill.question = null; APP.drill.pending = null; APP.drill.last = null; APP.drill.paused = false;
+  closeExplain(true);
   document.getElementById('drillScoreVal').textContent = '0';
   updateDrillTimerDisplay();
   nextDrillQuestion();
@@ -840,6 +930,7 @@ function startDrill() {
 
 function endDrill() {
   if (APP.drill.timerId) { clearTimeout(APP.drill.timerId); APP.drill.timerId = null; }
+  closeExplain(true);
   document.getElementById('drillFinalScore').textContent = `Score: ${APP.drill.score}`;
   showScreen('drillResults');
 }
@@ -847,16 +938,22 @@ function endDrill() {
 function bindDrillEvents() {
   const screen = document.getElementById('drillScreen');
   screen.addEventListener('input', (e) => { if (e.target.id === 'drillAnswer') handleDrillAnswerInput(e); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && APP.drill.paused) closeExplain(); });
   screen.addEventListener('keydown', (e) => {
+    if (APP.drill.paused) return;
     if (e.key === 'Enter' && (e.target.id === 'mkBid' || e.target.id === 'mkAsk')) {
       if (e.target.id === 'mkBid' && !document.getElementById('mkAsk').value) document.getElementById('mkAsk').focus();
       else submitMakeAnswer();
     }
   });
-  screen.addEventListener('click', (e) => {
+  // (on the whole app: the Explain button and its overlay sit outside the drill screen)
+  document.getElementById('app').addEventListener('click', (e) => {
     const t = e.target.closest('[data-drill]');
     if (!t) return;
     const a = t.dataset.drill;
+    if (a === 'explain') { openExplain(); return; }
+    if (a === 'close-explain') { closeExplain(); return; }
+    if (APP.drill.paused) return;
     if (a === 'pick') toggleDrillPick(t.dataset.name, t.dataset.side, parseInt(t.dataset.level, 10));
     else if (a === 'make-trades') submitMakeTrades();
     else if (a === 'no-arb') submitNoArb();

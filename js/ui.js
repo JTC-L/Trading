@@ -26,16 +26,19 @@ function rfqFormHtml({ isIdb, kind, idx, book, rfqSide, fixedBid, fixedBidSize, 
   const action = isIdb
     ? `data-action="submit-idb-market"`
     : `data-action="submit-market" data-kind="${kind}" data-idx="${idx}" data-book="${book ? 1 : 0}"`;
+  const step = tickSize();
   const bidPx = rfqSide === 'ask'
     ? `<span class="fixedpx">${fmt(fixedBid)}<small>x${fixedBidSize}</small></span>`
-    : `<input type="number" step="0.05" class="rfq-bid-px" placeholder="Bid" ${dis}>`;
+    : `<input type="number" step="${step}" class="rfq-bid-px" placeholder="Bid" ${dis}>`;
   const askPx = rfqSide === 'bid'
     ? `<span class="fixedpx">${fmt(fixedAsk)}<small>x${fixedAskSize}</small></span>`
-    : `<input type="number" step="0.05" class="rfq-ask-px" placeholder="Ask" ${dis}>`;
+    : `<input type="number" step="${step}" class="rfq-ask-px" placeholder="Ask" ${dis}>`;
   const volLabel = rfqSide === 'both' ? `Mkt for ${volume}` : rfqSide === 'bid' ? `Bid for ${volume}` : `Offer for ${volume}`;
+  const mw = kind != null ? maxUserWidth(kind, idx, volume) : null;
+  const maxW = mw != null ? `<small class="rfq-max">max ${mw >= 1 ? mw : fmt(mw)} wide</small>` : '';
   return `
     <div class="rfqbox">
-      <div class="rfq-vol">${volLabel}</div>
+      <div class="rfq-vol">${volLabel} ${maxW}</div>
       <div class="rfq-row">${bidPx}<span class="dash">-</span>${askPx}</div>
       <button ${action} ${dis}>Confirm</button>
       <div class="rfq-err"></div>
@@ -79,7 +82,7 @@ function simHalfHtml(kind, idx, book, cell, side, level, rolling) {
   const takeFrozen = APP.session.boardFrozen || !running();
   const own = lv.size <= 0 && lv.user > 0; // nothing here but your own order
   const btn = own
-    ? `<button class="dbtn own" data-action="own-btn" ${kb}>Cancel</button>`
+    ? `<button class="dbtn own" data-action="own-btn" ${kb}>Pull</button>`
     : `<button class="dbtn ${side === 'bid' ? 'yours' : 'mine'}" data-action="take-btn" ${kb} ${(takeFrozen || level > 0) ? 'disabled' : ''}>${side === 'bid' ? 'Yours' : 'Mine'}</button>`;
   const px = `<span class="px">${fmt(lv.px)}</span>`;
   const inner = side === 'bid' ? simSizeHtml(lv) + px + btn : btn + px + simSizeHtml(lv);
@@ -95,8 +98,9 @@ function bookHtml(kind, idx, book, cell) {
     rows += `<tr><td class="half bid"></td><td class="mid"></td>${simHalfHtml(kind, idx, book, cell, 'ask', i, anim.ask)}</tr>`;
   }
   // the empty middle level: type a price, press Enter, then say how many
-  rows += `<tr class="midrow"><td class="half bid has qin"><input class="px-in" type="number" step="0.05" placeholder="bid" data-side="bid" ${kb} autocomplete="off"></td>`
-    + `<td class="mid"></td><td class="half ask has qin"><input class="px-in" type="number" step="0.05" placeholder="offer" data-side="ask" ${kb} autocomplete="off"></td></tr>`;
+  const st = tickSize();
+  rows += `<tr class="midrow"><td class="half bid has qin"><input class="px-in" type="number" step="${st}" placeholder="bid" data-side="bid" ${kb} autocomplete="off"></td>`
+    + `<td class="mid"></td><td class="half ask has qin"><input class="px-in" type="number" step="${st}" placeholder="offer" data-side="ask" ${kb} autocomplete="off"></td></tr>`;
   for (let i = 0; i < 2; i++) { // bids: best nearest the middle
     rows += `<tr>${simHalfHtml(kind, idx, book, cell, 'bid', i, anim.bid)}<td class="mid"></td><td class="half ask"></td></tr>`;
   }
@@ -129,10 +133,13 @@ function cellHtml(kind, idx, book, cell) {
   }
   if (levelCap(kind, book) > 1) return bookHtml(kind, idx, book, cell);
 
-  // top prices only
+  // top prices only — with a small bid / offer box underneath to quote (improve) the market
+  const st = tickSize();
+  const qrow = `<div class="qrow"><input class="px-in" type="number" step="${st}" placeholder="bid" data-side="bid" ${kb} autocomplete="off">`
+    + `<input class="px-in" type="number" step="${st}" placeholder="offer" data-side="ask" ${kb} autocomplete="off"></div>`;
   if (!hasLevels(cell)) {
-    if (cell.status === 'indicative') return `<div class="topline mark">${fmt(cell.bid)} - ${fmt(cell.ask)}</div>`;
-    return `<div class="topline empty">—</div>`;
+    if (cell.status === 'indicative') return `<div class="topline mark">${cell.bid != null ? fmt(cell.bid) : '—'} - ${cell.ask != null ? fmt(cell.ask) : '—'}</div>${qrow}`;
+    return `<div class="topline empty">—</div>${qrow}`;
   }
   const bl = cell.bids[0], al = cell.asks[0];
   const hasUserSize = userHasOrders(cell);
@@ -142,6 +149,7 @@ function cellHtml(kind, idx, book, cell) {
       <button class="dbtn yours" data-action="take" ${kb} data-side="sell" ${(takeFrozen || !bl || bl.size <= 0) ? 'disabled' : ''}>Yours</button>
       <button class="dbtn mine" data-action="take" ${kb} data-side="buy" ${(takeFrozen || !al || al.size <= 0) ? 'disabled' : ''}>Mine</button>
     </div>
+    ${qrow}
     ${hasUserSize ? `<button data-action="pull" class="pullbtn" ${kb} ${takeFrozen ? 'disabled' : ''}>Pull</button>` : ''}`;
 }
 
@@ -265,6 +273,7 @@ function buildSkeleton() {
     <div class="strikecell" style="grid-column:${cols.strike}; grid-row:${i + 1};">
       <div class="strikeval">${strikes[i]}</div>
       <div class="calldelta" id="callDelta-${i}"></div>
+      <div class="strikevega" id="strikeVega-${i}"></div>
     </div>`;
   mainRow.innerHTML = main;
 
@@ -300,8 +309,12 @@ function renderAll() {
   const kinds = mainOptionKinds();
   for (let i = 0; i < N; i++) {
     kinds.forEach(kind => renderCellDom(kind, i, false));
-    const d = document.getElementById(`callDelta-${i}`);
-    if (d) d.textContent = 'Δ ' + fmt(BS.greeks(currentSpot(), APP.market.strikes[i], APP.market.T, mktR(), mktQ(), currentVol(), 'call').delta * 100);
+    const d = document.getElementById(`callDelta-${i}`), v = document.getElementById(`strikeVega-${i}`);
+    if (d || v) {
+      const g = BS.greeks(currentSpot(), APP.market.strikes[i], APP.market.T, mktR(), mktQ(), currentVol(), 'call');
+      if (d) d.textContent = 'Call Δ ' + fmt(g.delta * 100);       // per contract, in shares (the position panel's units)
+      if (v) v.textContent = 'Vega ' + fmt(g.vega * 100);          // per contract, per vol point
+    }
   }
   if (APP.config.spreadsOn) {
     for (let i = 0; i < N - 1; i++) {
@@ -346,8 +359,10 @@ function renderSpreadBookPanel() {
     cell._domSlotStatus = cell.status;
     const html = cellHtml(active.kind, active.idx, true, cell);
     if (html === cellEl._htmlKey) continue;
+    const saved = captureQuoteInputs(cellEl); // keep a half-typed quote across re-renders
     cellEl.innerHTML = html;
     cellEl._htmlKey = html;
+    restoreQuoteInputs(cellEl, saved);
     applyLiveFlash(cellEl, cell, priceChanged);
   }
 }
@@ -358,33 +373,19 @@ function renderStatusBanner() {
   if (APP.session.status === 'ended') el.textContent = 'Session complete.';
   else if (APP.session.status === 'running') {
     el.textContent = APP.session.boardFrozen ? 'IDB request in progress — board trading frozen.'
-      : (APP.session.phase === 'setup' ? `Setting up: ${setupLeft()} to make — clock paused` : 'Session running.');
+      : (APP.session.phase === 'setup' ? `Setting up: ${setupLeft()} to make — clock paused`
+        : (APP.config.mode === 'steps' ? (APP.session.rfqActive ? 'Make the market you were asked for.' : 'Press Next step (or space) — take any price you like first.') : 'Session running.'));
   }
   else el.textContent = '';
   if (typeof setConfigDisabled === 'function') setConfigDisabled(APP.session.status === 'running');
 }
 
+// The top-left of the session bar used to repeat the configuration; it's left empty now.
 function renderConfigSummary() {
   const el = document.getElementById('summaryText');
   if (!el) return;
-  const c = APP.config;
-  const d1 = c.delta1 === 'future' ? 'future' : 'stock';
-  const certaintyLabel = c.certaintyMode === 'stock' ? `fixed ${d1}`
-    : c.certaintyMode === 'vol' ? 'fixed vol' : 'neither fixed';
-  const parts = [
-    `${d1} · ${c.numStrikes} strike${c.numStrikes > 1 ? 's' : ''}`,
-    certaintyLabel,
-    `Trade pace: ${c.tradesPerMinute.toFixed(1)}/min`,
-    `Length: ${c.simLengthMin}m`,
-    c.bookView ? 'order book' : 'single price',
-    c.spreadsOn ? 'spreads on' : 'spreads off',
-    c.spreadBookOn ? 'spread book on' : 'spread book off',
-    c.idbOn ? 'IDB on' : 'IDB off',
-    c.showPosition ? 'position shown' : 'position hidden',
-    c.startWithPosition ? 'starting position' : '',
-  ].filter(Boolean);
-  el.textContent = parts.join(' · ');
-  el.title = el.textContent; // the bar truncates a long summary; the full text is on hover
+  el.textContent = '';
+  el.title = '';
 }
 
 function showScreen(name) {
@@ -403,16 +404,36 @@ function showScreen(name) {
   Object.entries(ids).forEach(([key, id]) => {
     document.getElementById(id).classList.toggle('hidden', key !== name);
   });
+  // the Explain button belongs to a drill in progress (it sits outside the screen so it isn't scaled)
+  const ex = document.getElementById('explainBtn');
+  if (ex) ex.classList.toggle('hidden', name !== 'drill' || !APP.drill || !APP.drill.last);
+  if (name !== 'drill' && typeof closeExplain === 'function' && APP.drill && APP.drill.paused) closeExplain(true);
 }
 
 function renderClock() {
   const el = document.getElementById('sessionClock');
   if (!el) return;
-  const total = APP.config.simLengthMin * 60;
+  const bar = document.getElementById('clockBar');
+  const nextBtn = document.getElementById('nextStepBtn');
+  const stepMode = APP.config.mode === 'steps';
+  if (nextBtn) nextBtn.classList.toggle('hidden', !stepMode);
+  if (stepMode) {
+    const total = APP.config.steps, n = APP.session.step;
+    const setup = APP.session.phase === 'setup';
+    el.textContent = setup ? 'Set-up' : `Step ${n} / ${total}`;
+    if (bar) bar.style.width = `${setup ? 0 : 100 * n / total}%`;
+    if (nextBtn) {
+      const waiting = !running() || setup || !!APP.session.rfqActive || APP.session.boardFrozen;
+      nextBtn.disabled = waiting;
+      nextBtn.textContent = n >= total ? 'Finish' : 'Next step ▶';
+      nextBtn.title = setup ? 'Make the board first' : (APP.session.rfqActive ? 'Make the market you were asked for first' : 'Bring in the next event (space)');
+    }
+    return;
+  }
+  const total = APP.market.lenSec;
   const rem = Math.max(0, total - APP.session.elapsedSec);
   const mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
   el.textContent = `${mm}:${ss.toString().padStart(2, '0')}`;
-  const bar = document.getElementById('clockBar');
   if (bar) bar.style.width = `${100 * (1 - rem / total)}%`;
 }
 
@@ -429,7 +450,7 @@ function renderIDBPanel() {
         box.innerHTML = `
           <div class="idb-request">RFQ from IDB: make a market in <b>${describeInstrument(active.kind, active.idx)}</b></div>
           ${rfqFormHtml({
-            isIdb: true, rfqSide: active.rfqSide,
+            isIdb: true, kind: active.kind, idx: active.idx, rfqSide: active.rfqSide,
             fixedBid: active.fixedBid, fixedBidSize: active.fixedBidSize,
             fixedAsk: active.fixedAsk, fixedAskSize: active.fixedAskSize,
             volume: active.rfqVolume,
@@ -460,9 +481,15 @@ function renderIDBPanel() {
 function renderFlow() {
   const el = document.getElementById('flow');
   if (!el) return;
-  const html = APP.history.slice(0, 80).map(h => {
+  // Step by step this is the Trading History: every completed step (newest first, tagged #1, #2 ...) and
+  // everything you did between steps (tagged You). Timed sessions keep the plain Flow log.
+  const steps = APP.config.mode === 'steps';
+  const title = document.querySelector('#flowSection h2');
+  if (title) title.textContent = steps ? 'Trading History' : 'Flow';
+  const html = APP.history.slice(0, steps ? 300 : 80).map(h => {
     const mm = Math.floor(h.ts / 60), ss = Math.floor(h.ts % 60);
-    return `<div class="flowbox flow-${h.color}"><span class="flow-time">${mm}:${ss.toString().padStart(2, '0')}</span> ${h.text}</div>`;
+    const when = h.mine ? 'You' : (h.step != null ? (h.step > 0 ? `#${h.step}` : '·') : `${mm}:${ss.toString().padStart(2, '0')}`);
+    return `<div class="flowbox flow-${h.color}${h.mine ? ' flow-mine' : ''}"><span class="flow-time">${when}</span> ${h.text}</div>`;
   }).join('');
   if (html === el._html) return;
   el._html = html;
@@ -499,14 +526,14 @@ function ticketHtml(t) {
       <div class="tk-row"><label>Size <input id="tkSize" type="number" min="1" step="1" value="${t.defaultQty}"></label></div>
       <div class="tk-chips">${chips}</div>
       <div class="tk-row"><button class="tk-go" data-action="tk-confirm">${verb}</button>
-        ${t.ownSize > 0 ? `<button data-action="tk-cancel-own">Cancel my ${t.ownSize}</button>` : ''}
+        ${t.ownSize > 0 ? `<button data-action="tk-cancel-own">Pull my ${t.ownSize}</button>` : ''}
         <button data-action="tk-close">Close</button></div>
       <div class="tk-err" id="tkErr"></div>`;
   }
   if (t.mode === 'place') {
     return `
       <div class="tk-title">New ${t.side === 'bid' ? 'bid' : 'offer'} in ${desc}</div>
-      <div class="tk-row"><label>Price <input id="tkPx" type="number" step="0.05" value="${t.defaultPx != null ? fmt(t.defaultPx) : ''}"></label>
+      <div class="tk-row"><label>Price <input id="tkPx" type="number" step="${tickSize()}" value="${t.defaultPx != null ? fmt(t.defaultPx) : ''}"></label>
         <label>Size <input id="tkSize" type="number" min="1" step="1" value="${t.defaultQty}"></label></div>
       <div class="tk-chips">${chips}</div>
       <div class="tk-row"><button class="tk-go" data-action="tk-confirm">Confirm</button><button data-action="tk-close">Close</button></div>
@@ -515,7 +542,7 @@ function ticketHtml(t) {
   return `
     <div class="tk-title">Your ${t.side === 'bid' ? 'bid' : 'offer'} in ${desc}</div>
     <div class="tk-sub">${t.ownSize} @ ${fmt(t.px)}</div>
-    <div class="tk-row"><button class="tk-go" data-action="tk-cancel-own">Cancel order</button><button data-action="tk-close">Close</button></div>
+    <div class="tk-row"><button class="tk-go" data-action="tk-cancel-own">Pull market</button><button data-action="tk-close">Close</button></div>
     <div class="tk-err" id="tkErr"></div>`;
 }
 
@@ -536,7 +563,7 @@ function openTicket(t, anchorEl) {
 }
 
 // Clicking Yours / Mine on a book's best price opens the size ticket (you take that price, up to the
-// other participants' size there). Clicking Cancel on a level that's only yours opens the cancel ticket.
+// other participants' size there). Clicking Pull on a level that's only yours opens the pull ticket.
 function onTakeBtn(btn) {
   if (!running()) return;
   const d = btn.dataset;
@@ -569,7 +596,7 @@ function onQuoteEnter(inp) {
   if (isNaN(px)) { toast('Type a price first.'); return; }
   const d = inp.dataset;
   const kind = d.kind, idx = parseInt(d.idx, 10), book = d.book === '1';
-  openTicket({ mode: 'place', kind, idx, book, side: d.side, defaultPx: px, defaultQty: kind === 'stock' ? 100 : 10 }, inp);
+  openTicket({ mode: 'place', kind, idx, book, side: d.side, defaultPx: px, defaultQty: kind === 'stock' ? 100 : 20 }, inp);
 }
 
 function ticketConfirm() {
@@ -590,6 +617,19 @@ function ticketConfirm() {
   closeTicket();
 }
 
+// ---- fitting the session screen to the window ---------------------------------------
+// The session screen is a rigid set of proportions designed for at least REF_W x REF_H. In a smaller
+// window (or a zoomed-in browser) the boxes would shrink while the text in them didn't, and things got
+// cut off. So below that size the whole screen is laid out at the reference size and scaled down to fit.
+const SESSION_REF_W = 1400, SESSION_REF_H = 900;
+function appScale() { return APP.ui.scale || 1; }
+function fitSession() {
+  const s = Math.max(0.35, Math.min(1, window.innerWidth / SESSION_REF_W, window.innerHeight / SESSION_REF_H));
+  APP.ui.scale = s;
+  document.documentElement.style.setProperty('--s', s.toFixed(4));
+  if (typeof updateSpreadLines === 'function') updateSpreadLines();
+}
+
 // ---- call/put spread connector lines -----------------------------------------
 
 // sourceYFrac picks where within the (small, fixed-height) spread box the line starts — using a
@@ -599,10 +639,11 @@ function lineBetween(idA, idB, crect, sideA, sideB, sourceYFrac) {
   const a = document.getElementById(idA), b = document.getElementById(idB);
   if (!a || !b || a.classList.contains('hidden') || b.classList.contains('hidden')) return '';
   const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-  const x1 = (sideA === 'right' ? ra.right : ra.left) - crect.left;
-  const y1 = ra.top + ra.height * sourceYFrac - crect.top;
-  const x2 = (sideB === 'left' ? (rb.left + rb.width * 0.22) : (rb.right - rb.width * 0.22)) - crect.left;
-  const y2 = rb.top + rb.height / 2 - crect.top;
+  const s = appScale(); // the session screen may be scaled to fit the window: the SVG draws in its own, unscaled units
+  const x1 = ((sideA === 'right' ? ra.right : ra.left) - crect.left) / s;
+  const y1 = (ra.top + ra.height * sourceYFrac - crect.top) / s;
+  const x2 = ((sideB === 'left' ? (rb.left + rb.width * 0.22) : (rb.right - rb.width * 0.22)) - crect.left) / s;
+  const y2 = (rb.top + rb.height / 2 - crect.top) / s;
   return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" />`;
 }
 
@@ -612,8 +653,8 @@ function updateSpreadLines() {
   if (!svg || !wrap) return;
   if (!APP.config.spreadsOn) { svg.innerHTML = ''; return; }
   const crect = wrap.getBoundingClientRect();
-  svg.setAttribute('width', crect.width);
-  svg.setAttribute('height', crect.height);
+  svg.setAttribute('width', crect.width / appScale());
+  svg.setAttribute('height', crect.height / appScale());
   let html = '';
   for (let i = 0; i < APP.market.strikes.length - 1; i++) {
     html += lineBetween(`cell-callSpread-${i}`, `cell-call-${i}`, crect, 'right', 'left', 0.25);
@@ -691,8 +732,7 @@ function renderPositionPanel() {
     <div><span>Delta</span><b>${fmt(g.delta)}</b></div>
     <div><span>Gamma</span><b>${fmt(g.gamma)}</b></div>
     <div><span>Vega</span><b>${fmt(g.vega)}</b></div>
-    <div><span>Theta</span><b>${fmt(g.theta)}</b></div>
-    <div><span>Rho</span><b>${fmt(g.rho)}</b></div>`;
+    <div><span>Theta</span><b>${fmt(g.theta)}</b></div>`;
 }
 
 // ---- event delegation --------------------------------------------------------
@@ -720,7 +760,7 @@ function bindEvents() {
       if (t) {
         const bookSide = t.mode === 'own' ? t.side : (t.side === 'buy' ? 'ask' : 'bid');
         closeTicket();
-        cancelUserOrders(t.kind, t.idx, t.book, bookSide);
+        pullUserMarkets(t.kind, t.idx, t.book, bookSide);
       }
     } else if (action === 'take') {
       const { kind, idx, book, side } = target.dataset;
@@ -753,11 +793,15 @@ function bindEvents() {
       if (res.error) box.querySelector('.rfq-err').textContent = res.error;
     }
   });
+  document.getElementById('nextStepBtn').addEventListener('click', () => advanceStep());
   document.addEventListener('keydown', (e) => {
+    const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'BUTTON');
+    if (e.key === ' ' && !typing && APP.ui.screen === 'session' && APP.config.mode === 'steps') { e.preventDefault(); advanceStep(); return; }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('px-in')) { onQuoteEnter(e.target); return; }
     if (!APP.ui.ticket) return;
     if (e.key === 'Escape') closeTicket();
     else if (e.key === 'Enter' && e.target.closest && e.target.closest('#ticket')) ticketConfirm();
   });
-  window.addEventListener('resize', () => updateSpreadLines());
+  window.addEventListener('resize', fitSession);
+  fitSession();
 }

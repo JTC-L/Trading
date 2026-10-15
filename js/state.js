@@ -7,10 +7,18 @@ APP.CONST = {
   DTE_DAYS: 30, // fixed days-to-expiration for the whole session
 };
 
+// The simulation's price tick (0.01 / 0.05 / 0.10), fixed for a session at its start. The drills always
+// work in 0.05 ticks, so they keep using the 5c helpers below.
+function tickSize() { return (APP.market && APP.market.tick) || (APP.config && APP.config.tick) || 0.05; }
+
 APP.util = {
   round5c(x) { return Math.round(x / 0.05) * 0.05; },
   floor5c(x) { return Math.floor(x / 0.05 + 1e-9) * 0.05; },
   ceil5c(x) { return Math.ceil(x / 0.05 - 1e-9) * 0.05; },
+  // the same three, on the session's own tick
+  rt(x) { const t = tickSize(); return Math.round(Math.round(x / t) * t * 100) / 100; },
+  ft(x) { const t = tickSize(); return Math.round(Math.floor(x / t + 1e-9) * t * 100) / 100; },
+  ct(x) { const t = tickSize(); return Math.round(Math.ceil(x / t - 1e-9) * t * 100) / 100; },
   fmt(x) {
     if (x === null || x === undefined || isNaN(x)) return '';
     const s = (Math.round(x * 100) / 100).toFixed(2);
@@ -34,6 +42,9 @@ APP.config = {
   idbOn: true,
   tradesPerMinute: 1,     // 0.5 - 4.0, step 0.1 — how often live quotes/RFQs come up
   simLengthMin: 10,
+  mode: 'timed',          // 'timed' (events arrive on a clock) | 'steps' (you press Next to walk through them)
+  steps: 40,              // 10 - 100 — how many steps a step-by-step session lasts
+  tick: 0.05,             // 0.01 | 0.05 | 0.10 — price increment; smaller ticks mean tighter markets
   showPosition: true,
   startWithPosition: false,
   delta1: 'future',       // 'future' | 'stock' — the delta-1 instrument
@@ -75,6 +86,11 @@ APP.market = {
   stockNodes: [],   // [{t(sec), val}]
   volNodes: [],
   T: APP.CONST.DTE_DAYS / 365,
+  tick: 0.05,       // the session's price tick, copied from the config at the start
+  lenSec: 600,      // session length on the (possibly virtual, in step mode) clock the fair-value paths run on
+  focus: [],        // strike indices the flow concentrates on: the at-the-money one and its neighbours
+  hotKinds: [],     // the couple of main-board instruments (e.g. calls, straddles) that do most of the trading
+  counts: {},       // `${kind}_${idx}` -> trades so far; the spread book / IDB lean on what's traded most
 };
 
 function isFutureMode() { return APP.market.delta1 === 'future'; }
@@ -91,6 +107,8 @@ APP.session = {
   phase: 'setup',   // 'setup' (the user makes the board; clock paused) | 'flow' (customers come in)
   setupQueue: [],   // main-board cells the user still has to make a market in
   lastActivity: 0,
+  step: 0,          // step mode: events delivered so far (the user's own trades don't count)
+  stepQueue: [],    // step mode: follow-on orders that customers have decided to put up
 };
 
 // instrument "slots" on the board. Each slot has a cell: a small order book plus status.
