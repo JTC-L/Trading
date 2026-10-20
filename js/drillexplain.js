@@ -44,15 +44,16 @@ const exParity = (q) => APP.drill.delta1 === 'future'
 function explainHtml(last) {
   const q = last.q, a = last.ans || {};
   const hl = {};
+  const ctx = { q, hl, answer: a, user: null };
   let why = '';
   if (q.type === 'make') why = explainMake(q, a);
   else if (q.type === 'arb') why = explainArb(q, a, hl);
-  else if (q.type === 'take') why = explainTake(q, a, hl);
+  else if (q.type === 'improve') why = explainImprove(q, a, hl, ctx);
   else why = explainSingle(q, a);
 
   let board = '';
   if (q.type !== 'single') {
-    DRILL_CTX = { q, hl, answer: a };
+    DRILL_CTX = ctx;
     try { board = bookBoardHtml(); } finally { DRILL_CTX = null; }
   }
   return `<div class="ex-card">
@@ -61,7 +62,6 @@ function explainHtml(last) {
       <span class="ex-paused">⏸ timer paused</span>
       <button class="ex-close" data-drill="close-explain">Back to the drill</button>
     </div>
-    ${q.alert ? `<div class="ex-alert">${q.alert}</div>` : ''}
     ${board}
     <div class="ex-why">${why}</div>
   </div>`;
@@ -88,9 +88,9 @@ function explainMake(q, a) {
   let h = `<p>The <b>${t}</b> isn't on the screen, but it can be built from the two books that are, using put-call parity (<span class="eq">${exParity(q)}</span>; Straddle = Call + Put). A market in it should be as tight as that replication allows — never better, or the replication would beat you.</p>`;
   h += `<p><b>Bid:</b> if you buy the ${t} at your bid, you can sell the equivalent package into the other books for ${fx(bid.val)} — so you can bid up to that without risk. ${bid.html}</p>`;
   h += `<p><b>Offer:</b> if you sell the ${t} at your offer, you can buy the equivalent package for ${fx(ask.val)} — so you can offer down to that. ${ask.html}</p>`;
-  const rounded = `${fx(APP.util.floor5c(b.rawBid))} / ${fx(APP.util.ceil5c(b.rawAsk))}`;
-  h += `<p>Rounded to the 0.05 grid (bid down, offer up) that's ${rounded}`;
-  if (isFinite(q.floor) && b.bid > APP.util.floor5c(b.rawBid) + 1e-9) {
+  const rounded = `${fx(dft(b.rawBid))} / ${fx(dct(b.rawAsk))}`;
+  h += `<p>Rounded to the ${fx(dtick())} tick (bid down, offer up) that's ${rounded}`;
+  if (isFinite(q.floor) && b.bid > dft(b.rawBid) + 1e-9) {
     h += `. But nobody bids less than an option's intrinsic value (${fx(q.floor)} here), so the bid is lifted to <b>${fx(b.bid)}</b>`;
   }
   h += `: the best market is <b class="good">${fx(b.bid)} / ${fx(b.ask)}</b>.</p>`;
@@ -128,40 +128,53 @@ function explainArb(q, a, hl) {
   return h;
 }
 
-function explainTake(q, a, hl) {
-  const keys = Object.keys(q.books);
-  q.correct.forEach(l => { hl[`${l.name}:${l.side}:${l.level || 0}`] = l.side; });
-  let h = `<p>Every instrument has a fair value, and they all fit together by put-call parity (<span class="eq">${exParity(q)}</span>; Straddle = Call + Put). Here: Call − Put = ${fx(q.D)}, Straddle = ${fx(q.T)}, so`;
-  h += keys.map(k => ` ${exName(k, q)} ${fx(q.values[k])}`).join(',') + '.</p>';
-  if (!q.correct.length) {
-    h += `<p><b>Nothing to take:</b> every book brackets its fair value — each bid is at or below it and each offer at or above — so any trade would give edge away.</p>`;
-  } else {
-    h += `<p><b>The best trade${q.correct.length > 1 ? 's' : ''}:</b></p><p>`;
-    h += q.correct.map(l => {
-      const lv = l.side === 'buy' ? q.books[l.name].asks[l.level || 0] : q.books[l.name].bids[l.level || 0];
-      const edge = l.side === 'buy' ? q.values[l.name] - lv.px : lv.px - q.values[l.name];
-      return `${exLeg(l, q)} at ${fx(lv.px)} (x${lv.size}): fair value is ${fx(q.values[l.name])}, so you ${l.side === 'buy' ? 'buy it' : 'sell it'} <span class="good">${fx(edge)}</span> ${l.side === 'buy' ? 'under' : 'over'} fair.`;
-    }).join('<br>') + '</p>';
-    h += `<p>The other books all sit around the same consistent set of fair values; these quotes are the ones standing out in front of their books (and a little thinner than normal). Hitting any other price gives away edge.</p>`;
-  }
-  if (q.news) {
-    const n = q.news, z = exName(n.name, q);
-    const what = n.why === 'delta' ? (n.name === 'stock' ? 'the delta-1 instrument, which you trade for direction' : 'an in-the-money option, which you trade for direction')
-      : (n.name === 'straddle' ? 'an at-the-money straddle, which is a pure volatility trade' : 'an at-the-money option, which you trade for volatility');
-    if (n.informed) {
-      h += `<p><b>The news:</b> a massive clip (${n.size}) in ${what} — someone with a reason. A trade like that is informed, so its price (${fx(n.px)}) is the ${z}'s true value, and it anchors all the other fair values.</p>`;
-    } else if (n.kind === 'noise') {
-      h += `<p><b>The news:</b> a massive clip (${n.size}) — but in the ${z}, an out-of-the-money option (or an off-centre straddle) that nobody takes a view with. Size alone doesn't make a trade informed: it needs a reason as well (delta in the future or in-the-money options, vol in at-the-money options). So ${fx(n.px)} is just a price inside the market — ignore it.</p>`;
-    } else {
-      h += `<p><b>The news:</b> a clip of ${n.size} in the ${z} is only about the size of the books, so it says little — ${fx(n.px)} is just a price inside its market. A big trade in the right kind of instrument is what carries information.</p>`;
-    }
-  }
-  if (a.hedge) {
-    h += `<p class="ex-you">You took a price that isn't the best trade but belongs to a riskless package (${a.hedge.legs.map(l => exLeg(l, q)).join(', ')} locks in ${fx(a.hedge.profit)}) → +1.</p>`;
-  } else if (a.none) {
-    h += `<p class="ex-you">You called it correctly → +2.</p>`;
-  } else if (a.legs) {
-    h += `<p class="ex-you">You took ${a.legs.map(l => exLeg(l, q)).join(' and ')} → +${a.pts}.</p>`;
+function explainImprove(q, a, hl, ctx) {
+  const imp = a.improve || {};
+  const u = imp.user;
+  // the market to explain: the one you ended on if it was a good one, otherwise the one the books point to
+  const tg = (u && q.targets.find(o => o.key === u.key && o.side === u.side)) || q.intended;
+  const name = exName(tg.key, q);
+  const best = q.books[tg.key];
+  const optimal = { key: tg.key, side: tg.side, px: tg.limit, size: tg.size };
+  ctx.user = optimal; // the board shows the most competitive market on its instrument
+  const arbs = improveArbs(q, optimal).sort((x, y) => y.profit - x.profit);
+  const pkg = arbs[0];
+  pkg.legs.forEach(l => { if (l.name !== tg.key) hl[`${l.name}:${l.side}:0`] = l.side; });
+
+  const an = q.anchor, anName = exName(an.key, q);
+  const anLvl = q.books[an.key][an.side === 'bid' ? 'bids' : 'asks'][0];
+  let h = `<p><b>The large order</b> is a customer ${an.side === 'bid' ? 'bid' : 'offer'} of ${anLvl.size} in the ${anName}. It's firm — you can always trade against it to hedge — so the other markets are anchored on it. `;
+  h += q.cue === 'delta'
+    ? `A big, aggressive order in the ${drillName('stock').toLowerCase()} is someone who wants direction, and a deep in-the-money option gives the same exposure — so that's the kind of market to improve.</p>`
+    : `A big order in an at-the-money option or straddle is someone who wants volatility, and another at-the-money option market moves with it — so that's the kind of market to improve.</p>`;
+
+  const r = replText(q, tg.rep, tg.side);
+  const curPx = tg.side === 'bid' ? best.bid : best.ask;
+  h += `<p><b>The market to improve:</b> the ${name} ${tg.side === 'bid' ? 'bid' : 'offer'}. From the other books, the equivalent package can be ${tg.side === 'bid' ? 'sold for' : 'bought for'} <b>${fx(tg.implied)}</b> ${r.html}, but the ${name} ${tg.side === 'bid' ? 'bid' : 'offer'} is only ${fx(curPx)}.</p>`;
+  h += `<p><b>The band:</b> any ${tg.side === 'bid' ? 'bid above ' + fx(curPx) + ' up to' : 'offer below ' + fx(curPx) + ' down to'} <b>${fx(tg.limit)}</b> is inside the arb-able band — you ${tg.side === 'bid' ? 'buy' : 'sell'} at your price and lay it off at ${fx(tg.implied)}, so there's a profit. The most competitive price is <b>${fx(tg.limit)}</b>.</p>`;
+
+  // the size: whichever leg of the package runs out first
+  const legSizes = Object.entries(tg.rep.w).map(([n, w]) => {
+    const lvl = ((tg.side === 'bid') === (w > 0)) ? q.books[n].bids[0] : q.books[n].asks[0];
+    return { n, size: lvl.size, w: Math.abs(w), cap: lvl.size / Math.abs(w) };
+  }).sort((x, y) => x.cap - y.cap);
+  const lim = legSizes[0];
+  h += `<p><b>The size:</b> <b>${tg.size}</b> — the ${exName(lim.n, q)} (${lim.size} on the ${(tg.side === 'bid') === (tg.rep.w[lim.n] > 0) ? 'bid' : 'offer'}${lim.w !== 1 ? ', ' + lim.w + ' of it per ' + name : ''}) is the leg that runs out first, and a bigger market than that could not be fully hedged.</p>`;
+
+  const qtyT = pkg.legs.find(l => l.name === tg.key).qty;
+  const pkgs = Math.floor(tg.size / qtyT);
+  h += `<p><b>The arbitrage:</b> ${tg.side === 'bid' ? 'buy' : 'sell'} ${tg.size} ${name} at ${fx(tg.limit)}, and ${pkg.legs.filter(l => l.name !== tg.key).map(l => `${l.side} ${l.qty * pkgs} ${exName(l.name, q)} at ${fx(l.side === 'buy' ? q.books[l.name].asks[0].px : q.books[l.name].bids[0].px)}`).join(', ')}. By put-call parity (<span class="eq">${exParity(q)}</span>; Straddle = Call + Put) the legs cancel exactly, so it locks in <b class="good">${fx(pkg.profit)}</b> per package, ${pkgs} times over.</p>`;
+
+  const sc = imp.sc;
+  if (sc) {
+    const f = imp.first;
+    const parts = [
+      `${sc.p1 ? '✓' : '✗'} improved a good market (first try)`,
+      `${sc.p2 ? '✓' : '✗'} price inside the arb-able band (first try)`,
+      `${sc.p3 ? '✓' : '✗'} the most competitive price in the right size`,
+      `${sc.p4 ? '✓' : '✗'} completed the other legs (first try)`,
+    ];
+    h += `<p class="ex-you">You${f ? ` first tried ${f.side === 'bid' ? 'a bid' : 'an offer'} of ${fx(f.px)} in ${f.size} ${exName(f.key, q)}` : ' skipped'}${imp.history && imp.history.length > 1 ? `, changed it ${imp.history.length - 1} time${imp.history.length > 2 ? 's' : ''}` : ''}${imp.skipped ? ', and skipped' : ''}. ${parts.join(' · ')} → +${sc.total}.</p>`;
   }
   return h;
 }

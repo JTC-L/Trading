@@ -78,7 +78,7 @@ function reviewTrade(kind, idx, side, qty, price, source, meta, gBefore, gAfter)
     const gap = side === 'buy' ? (imp.bid != null ? imp.bid - price : null) : (imp.ask != null ? price - imp.ask : null);
     if (gap != null) parity = { gap, bidRep: imp.bidRep, askRep: imp.askRep, quotes, impBid: imp.bid, impAsk: imp.ask };
   }
-  const lots = kind === 'stock' ? qty / 100 : qty; // the delta-1 trades in shares: count it in 100-share lots like the options
+  const lots = kind === 'stock' ? qty * delta1Multiplier() / 100 : qty; // count every trade in 100-unit lots, as the options are
   R.trades.push(Object.assign(reviewStamp(), {
     kind, idx, side, qty, lots, price, source, fair, edge, parity,
     vegaBefore: gBefore.vega, vegaAfter: gAfter.vega, deltaBefore: gBefore.delta, deltaAfter: gAfter.delta,

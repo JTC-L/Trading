@@ -20,7 +20,7 @@ function addTradeLegs(kind, idx, side, qty, price) {
   const legs = [];
   switch (kind) {
     case 'stock':
-      legs.push({ type: 'stock', qty: s, entryPrice: price });
+      legs.push({ type: 'stock', qty: s * delta1Multiplier(), entryPrice: price }); // a future's contracts are 100 each; a stock's quantity is shares
       break;
     case 'call':
       legs.push({ type: 'call', strike: strikes[idx], qty: s, entryPrice: price });

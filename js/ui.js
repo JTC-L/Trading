@@ -53,7 +53,7 @@ function rfqFormHtml({ isIdb, kind, idx, book, rfqSide, fixedBid, fixedBidSize, 
 
 // What size fills a bar completely, per instrument.
 function simMaxSize(kind) {
-  if (kind === 'stock') { const m = APP.config.certaintyMode; return m === 'stock' ? 12500 : (m === 'vol' ? 5000 : 2000); }
+  if (kind === 'stock') { const m = APP.config.certaintyMode; return (m === 'stock' ? 12500 : (m === 'vol' ? 5000 : 2000)) / delta1Multiplier(); }
   return 100;
 }
 
@@ -575,7 +575,7 @@ function onTakeBtn(btn) {
   openTicket({
     mode: 'take', kind, idx, book, side: side === 'bid' ? 'sell' : 'buy', // Yours hits the bid, Mine lifts the offer
     px: lvl.px, maxQty: lvl.size, ownSize: lvl.user,
-    defaultQty: kind === 'stock' ? Math.min(lvl.size, 100) : lvl.size,
+    defaultQty: kind === 'stock' ? Math.min(lvl.size, isFutureMode() ? 10 : 100) : lvl.size,
   }, btn);
 }
 
@@ -596,7 +596,7 @@ function onQuoteEnter(inp) {
   if (isNaN(px)) { toast('Type a price first.'); return; }
   const d = inp.dataset;
   const kind = d.kind, idx = parseInt(d.idx, 10), book = d.book === '1';
-  openTicket({ mode: 'place', kind, idx, book, side: d.side, defaultPx: px, defaultQty: kind === 'stock' ? 100 : 20 }, inp);
+  openTicket({ mode: 'place', kind, idx, book, side: d.side, defaultPx: px, defaultQty: kind === 'stock' ? (isFutureMode() ? 10 : 100) : 20 }, inp);
 }
 
 function ticketConfirm() {

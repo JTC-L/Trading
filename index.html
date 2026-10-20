@@ -138,11 +138,17 @@
           <label><input type="radio" name="drillView" value="book" class="cfg-input"> Order book</label>
           <label><input type="radio" name="drillView" value="single" class="cfg-input"> Single price</label>
         </div>
+        <div class="cfg-row cfg-radiogroup">
+          <span class="cfg-label">Tick size:</span>
+          <label><input type="radio" name="drillTick" value="0.01" class="cfg-input"> 0.01</label>
+          <label><input type="radio" name="drillTick" value="0.05" class="cfg-input"> 0.05</label>
+          <label><input type="radio" name="drillTick" value="0.1" class="cfg-input"> 0.10</label>
+        </div>
         <div class="cfg-row cfg-radiogroup" id="drillTypesRow">
           <span class="cfg-label">Questions:</span>
           <label><input type="checkbox" checked disabled> Make a market (always on)</label>
           <label><input type="checkbox" id="cfgTypeArb" class="cfg-input"> Arbitrage</label>
-          <label><input type="checkbox" id="cfgTypeTake" class="cfg-input"> Take liquidity</label>
+          <label><input type="checkbox" id="cfgTypeImprove" class="cfg-input"> Improve a market</label>
         </div>
         <div class="cfg-row">
           <label class="slider-label">Session time <b id="cfgDrillMinutesLabel"></b></label>
@@ -228,7 +234,6 @@
       <div></div>
     </div>
     <div id="drillTypeBox"></div>
-    <div id="drillAlert" class="hidden"></div>
 
     <div id="drillBoard"></div>
     <div id="drillFooter"></div>

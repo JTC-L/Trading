@@ -491,3 +491,12 @@ section h2, aside h2 { margin: 0 0 6px 0; font-size: 0.85em; color: #444; }
 .spreadbook-item .cell .qrow { flex: 0 1 52%; }
 .spreadbook-item .cell .pullbtn { width: auto; margin-top: 0; padding: 1px 10px; }
 .spreadbook-item .cell .rfqbox { flex: 1 1 100%; }
+
+/* ---- Improve a Market ---- */
+.imp-form { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; }
+.imp-form select, .imp-form input { font-size: 1em; padding: 8px 10px; border: 2px solid #1554d6; border-radius: 8px; outline: none; background: #fff; }
+.imp-form input { width: 130px; text-align: center; }
+.imp-form .drill-btn { width: auto; padding: 9px 18px; }
+.imp-trade { font-size: 1.15em; background: #eaf7ee; border: 2px solid #1fa855; border-radius: 8px; padding: 6px 18px; }
+.ladder td.half.you { box-shadow: inset 0 0 0 3px #1554d6; background-color: #eef3ff; }
+.hlbadge.you { border-color: #1554d6; color: #1554d6; }

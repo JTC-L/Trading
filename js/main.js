@@ -82,8 +82,12 @@ function bindConfigPanel() {
   });
   $('cfgTypeArb').checked = APP.drillConfig.types.arb;
   $('cfgTypeArb').addEventListener('change', (e) => { APP.drillConfig.types.arb = e.target.checked; });
-  $('cfgTypeTake').checked = APP.drillConfig.types.take;
-  $('cfgTypeTake').addEventListener('change', (e) => { APP.drillConfig.types.take = e.target.checked; });
+  $('cfgTypeImprove').checked = APP.drillConfig.types.improve;
+  $('cfgTypeImprove').addEventListener('change', (e) => { APP.drillConfig.types.improve = e.target.checked; });
+  document.querySelectorAll('input[name="drillTick"]').forEach(r => {
+    r.checked = (parseFloat(r.value) === APP.drillConfig.tick);
+    r.addEventListener('change', (e) => { if (e.target.checked) APP.drillConfig.tick = parseFloat(e.target.value); });
+  });
   syncTypesRow();
 
   $('cfgTradePace').value = APP.config.tradesPerMinute;

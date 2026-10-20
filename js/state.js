@@ -59,7 +59,8 @@ APP.drillConfig = {
   minutes: 10, // 1 - 20
   delta1: 'future', // 'future' | 'stock'
   view: 'book',     // 'book' | 'single'
-  types: { arb: true, take: true }, // order-book question types switched on (make-a-market is always on)
+  types: { arb: true, improve: true }, // order-book question types switched on (make-a-market is always on)
+  tick: 0.05,       // 0.01 | 0.05 | 0.10
 };
 
 APP.ui = {
@@ -95,6 +96,8 @@ APP.market = {
 
 function isFutureMode() { return APP.market.delta1 === 'future'; }
 function delta1Name() { return isFutureMode() ? 'Future' : 'Stock'; }
+// A future is a contract of 100, like an option (so it's traded in contracts); a stock has no multiplier (it's traded in shares).
+function delta1Multiplier() { return isFutureMode() ? 100 : 1; }
 
 APP.session = {
   status: 'idle', // idle | running | ended

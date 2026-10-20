@@ -245,11 +245,15 @@ function buildLiveQuoteForCell(kind, idx, size, neutral) {
 // underlying's liquidity is driven by the options market makers hedging on it. When the delta-1
 // is fixed for the session it's far more liquid (~10000 vs ~50 in the ITM options); when vol is
 // fixed instead, delta-1 and options liquidity are more comparable (~4000).
+// A stock trades in shares, so those are share counts; a future trades in contracts of 100, so they come
+// out as that many contracts (the same sizes the options use).
 function stockSizeChoice() {
   const mode = APP.config.certaintyMode;
-  if (mode === 'stock') return APP.util.choice([80, 90, 100, 110, 120]) * 100;
-  if (mode === 'vol') return APP.util.choice([32, 36, 40, 44, 48]) * 100;
-  return APP.util.choice([5, 10, 15, 20, 25]) * 100;
+  let shares;
+  if (mode === 'stock') shares = APP.util.choice([80, 90, 100, 110, 120]) * 100;
+  else if (mode === 'vol') shares = APP.util.choice([32, 36, 40, 44, 48]) * 100;
+  else shares = APP.util.choice([5, 10, 15, 20, 25]) * 100;
+  return Math.max(1, Math.round(shares / delta1Multiplier()));
 }
 
 function fillUserOrderAgainstDelta1(side, px, size) {
@@ -576,7 +580,7 @@ function onSideExhausted(kind, idx, book, cell, bookSide, px) {
 
 // How much a customer takes from the best price: all of it 70% of the time, otherwise a part of it.
 function customerClipSize(kind, total) {
-  if (kind === 'stock') return Math.min(total, APP.util.choice([500, 1000, 2000, 3000]));
+  if (kind === 'stock') return Math.min(total, Math.max(1, Math.round(APP.util.choice([500, 1000, 2000, 3000]) / delta1Multiplier())));
   return Math.random() < 0.7 ? total : Math.max(5, Math.round(total * APP.util.rand(0.2, 0.9) / 5) * 5);
 }
 
