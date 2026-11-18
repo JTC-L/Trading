@@ -760,7 +760,7 @@ function bindEvents() {
       if (t) {
         const bookSide = t.mode === 'own' ? t.side : (t.side === 'buy' ? 'ask' : 'bid');
         closeTicket();
-        pullUserMarkets(t.kind, t.idx, t.book, bookSide);
+        pullUserMarkets(t.kind, t.idx, t.book, bookSide, t.px);
       }
     } else if (action === 'take') {
       const { kind, idx, book, side } = target.dataset;

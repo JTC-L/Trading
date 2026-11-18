@@ -904,27 +904,35 @@ function scheduleTightenReward(kind, idx, book, side, px) {
   }, 600);
 }
 
-// Pull the user's own market from a cell (one side, or both). Pulling leaves nothing in its place: no
-// indicative price is put up where your quote was.
-function pullUserMarkets(kind, idx, book, side) {
+// Pull the user's own order at one price level (side + px). Only that level goes: orders you placed
+// earlier at other prices on the same instrument stay where they are. Pulling leaves nothing in its
+// place: no indicative price is put up where your quote was.
+function pullUserMarkets(kind, idx, book, side, px) {
   const cell = getCell(kind, idx, book);
   if (!cell) return;
-  ['bid', 'ask'].forEach(s => {
-    if (side && side !== s) return;
-    const arr = s === 'bid' ? cell.bids : cell.asks;
-    arr.forEach(l => { l.user = 0; });
-    const kept = arr.filter(l => l.size > 0);
-    if (s === 'bid') cell.bids = kept; else cell.asks = kept;
-  });
+  const arr = side === 'bid' ? cell.bids : cell.asks;
+  const lvl = arr.find(l => l.user > 0 && Math.abs(l.px - px) < 1e-9);
+  if (!lvl) return;
+  lvl.user = 0;
+  const kept = arr.filter(l => l.size > 0 || l.user > 0);
+  if (side === 'bid') cell.bids = kept; else cell.asks = kept;
   syncCell(cell);
-  toast(`You pulled your market in ${describeInstrument(kind, idx, book)}.`);
-  if (APP.config.mode === 'steps' && APP.session.phase === 'flow') logFlow(`You pulled your market in ${describeInstrument(kind, idx, book)}`, 'gray', true);
+  const what = `${side === 'bid' ? 'bid' : 'offer'} of ${fmt(px)} in ${describeInstrument(kind, idx, book)}`;
+  toast(`You pulled your ${what}.`);
+  if (APP.config.mode === 'steps' && APP.session.phase === 'flow') logFlow(`You pulled your ${what}`, 'gray', true);
   renderAll();
 }
 
+// The Pull button under a top-of-book cell pulls the orders you can see there: your bid and / or offer
+// at the top of the book (or, if someone has beaten you on a side, your best order on that side).
 function handlePull(kind, idx, book) {
   if (!running() || APP.session.boardFrozen) return;
-  pullUserMarkets(kind, idx, book, null);
+  const cell = getCell(kind, idx, book);
+  if (!cell) return;
+  ['bid', 'ask'].forEach(s => {
+    const lvl = (s === 'bid' ? cell.bids : cell.asks).find(l => l.user > 0);
+    if (lvl) pullUserMarkets(kind, idx, book, s, lvl.px);
+  });
 }
 
 // The user lifts the offer (side 'buy') or hits the bid (side 'sell') at the best level, for up to

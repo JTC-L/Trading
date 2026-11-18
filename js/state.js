@@ -49,7 +49,7 @@ APP.config = {
   startWithPosition: false,
   delta1: 'future',       // 'future' | 'stock' — the delta-1 instrument
   numStrikes: 2,          // 1 - 5
-  bookView: true,         // order-book view (top 2 levels) on the main board vs. single top-of-book price
+  bookView: false,        // order-book view (top 2 levels) on the main board vs. single top-of-book price
 };
 
 // seconds between ambient events, derived from the trades/minute config
